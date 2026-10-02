@@ -1,5 +1,6 @@
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.animation import FuncAnimation
 
 wavelength = 1.0
 k = 2 * np.pi / wavelength
@@ -17,3 +18,16 @@ ax.set(xlabel=r'$x/\lambda$', ylabel=r'$y/\lambda$',
        title=r'Plane wave, $+x$ propagation, $\lambda=1$')
 fig.tight_layout()
 fig.savefig('/tmp/qlf_plane_wave.png', dpi=140)
+
+animation_figure, animation_ax = plt.subplots(figsize=(8, 5))
+animated_image = animation_ax.imshow(field.real, extent=[-2, 2, -1.5, 1.5],
+                                     origin='lower', cmap='RdBu_r', vmin=-1, vmax=1)
+animation_ax.set(xlabel=r'$x/\lambda$', ylabel=r'$y/\lambda$')
+
+def advance(frame):
+    animated_image.set_data(np.real(field * np.exp(-1j * 2 * np.pi * frame / 32)))
+    return (animated_image,)
+
+wave_animation = FuncAnimation(animation_figure, advance, frames=32,
+                               interval=40, blit=True)
+wave_animation.save('/tmp/qlf_plane_wave.gif', writer='pillow', fps=25)
