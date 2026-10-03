@@ -47,3 +47,25 @@ for ax, values, title in zip(source_axes, (field.real, point_wave.real),
 source_axes[1].plot(*source, 'ko', markersize=4)
 source_fig.tight_layout()
 source_fig.savefig('/tmp/qlf_point_wave.png', dpi=140)
+
+def two_sources(separation, phase_difference):
+    waves = []
+    for sx, phase_offset in [(-separation / 2, 0), (separation / 2, phase_difference)]:
+        distance = np.hypot(X - sx, Y)
+        wave = np.zeros_like(field)
+        valid = distance > 0.08
+        wave[valid] = np.exp(1j * (k * distance[valid] + phase_offset)) / (4 * np.pi * distance[valid])
+        waves.append(wave)
+    return waves[0] + waves[1]
+
+interference_fig, interference_axes = plt.subplots(2, 2, figsize=(9, 7))
+for ax, separation, offset in zip(interference_axes.flat,
+                                  (0.5, 0.5, 1.0, 1.0),
+                                  (0, np.pi, 0, np.pi)):
+    wave = two_sources(separation, offset)
+    ax.imshow(wave.real, extent=[-2, 2, -1.5, 1.5], origin='lower',
+              cmap='RdBu_r', vmin=-0.4, vmax=0.4)
+    ax.plot([-separation / 2, separation / 2], [0, 0], 'ko', markersize=3)
+    ax.set_title(rf'$d={separation}\lambda$, $\Delta\phi={offset/np.pi:g}\pi$')
+interference_fig.tight_layout()
+interference_fig.savefig('/tmp/qlf_two_sources.png', dpi=140)
