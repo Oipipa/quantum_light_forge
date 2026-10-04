@@ -86,3 +86,22 @@ cross_term = 2 * np.real(field[probe].conjugate() * scattered[probe])
 assert np.isclose(abs(total[probe]) ** 2,
                   abs(field[probe]) ** 2 + abs(scattered[probe]) ** 2 + cross_term)
 print(f'Interference term at probe: {cross_term:.4f}')
+
+plt.style.use('dark_background')
+showcase_fig, showcase_ax = plt.subplots(figsize=(9, 5), facecolor='#081322')
+showcase_ax.set_facecolor('#081322')
+display = showcase_ax.imshow(total.real, extent=[-2, 2, -1.5, 1.5],
+                             origin='lower', cmap='coolwarm', vmin=-1.8, vmax=1.8,
+                             interpolation='bilinear')
+showcase_ax.plot(*source, 'o', color='#ffc87a', markersize=5)
+showcase_ax.set(xlabel=r'$x/\lambda$', ylabel=r'$y/\lambda$',
+                title='Plane wave and outgoing scattered wave')
+showcase_fig.tight_layout()
+
+def animate_total(frame):
+    display.set_data(np.real(total * np.exp(-1j * 2 * np.pi * frame / 48)))
+    return (display,)
+
+showcase_animation = FuncAnimation(showcase_fig, animate_total, frames=48,
+                                   interval=35, blit=True)
+showcase_animation.save('/tmp/qlf_showcase.gif', writer='pillow', fps=28, dpi=140)
