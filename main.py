@@ -69,3 +69,20 @@ for ax, separation, offset in zip(interference_axes.flat,
     ax.set_title(rf'$d={separation}\lambda$, $\Delta\phi={offset/np.pi:g}\pi$')
 interference_fig.tight_layout()
 interference_fig.savefig('/tmp/qlf_two_sources.png', dpi=140)
+
+scattered = 2.0 * point_wave
+total = field + scattered
+fields_fig, fields_axes = plt.subplots(1, 3, figsize=(12, 3.8))
+for ax, values, title in zip(fields_axes,
+                             (abs(field) ** 2, abs(scattered) ** 2, abs(total) ** 2),
+                             ('Incident intensity', 'Scattered intensity', 'Total intensity')):
+    image = ax.imshow(values, extent=[-2, 2, -1.5, 1.5], origin='lower', cmap='magma')
+    fields_fig.colorbar(image, ax=ax, shrink=0.8)
+    ax.set_title(title)
+fields_fig.tight_layout()
+fields_fig.savefig('/tmp/qlf_total_intensity.png', dpi=140)
+probe = (200, 270)
+cross_term = 2 * np.real(field[probe].conjugate() * scattered[probe])
+assert np.isclose(abs(total[probe]) ** 2,
+                  abs(field[probe]) ** 2 + abs(scattered[probe]) ** 2 + cross_term)
+print(f'Interference term at probe: {cross_term:.4f}')
