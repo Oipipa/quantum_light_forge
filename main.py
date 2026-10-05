@@ -1,5 +1,6 @@
 import matplotlib.pyplot as plt
 import numpy as np
+import os
 from matplotlib.animation import FuncAnimation
 
 wavelength = 1.0
@@ -30,7 +31,8 @@ def advance(frame):
 
 wave_animation = FuncAnimation(animation_figure, advance, frames=32,
                                interval=40, blit=True)
-wave_animation.save('/tmp/qlf_plane_wave.gif', writer='pillow', fps=25)
+if os.environ.get('QLF_EXPORT') == '1':
+    wave_animation.save('/tmp/qlf_plane_wave.gif', writer='pillow', fps=25)
 
 # The plot is a 2D slice of a 3D outgoing spherical wave.
 source = np.array([-0.4, 0.0])
@@ -104,4 +106,24 @@ def animate_total(frame):
 
 showcase_animation = FuncAnimation(showcase_fig, animate_total, frames=48,
                                    interval=35, blit=True)
-showcase_animation.save('/tmp/qlf_showcase.gif', writer='pillow', fps=28, dpi=140)
+if os.environ.get('QLF_EXPORT') == '1':
+    showcase_animation.save('/tmp/qlf_showcase.gif', writer='pillow', fps=28, dpi=140)
+
+def scalar_field(positions, amplitudes, grid_x=X, grid_y=Y):
+    result = np.zeros_like(grid_x, dtype=complex)
+    for (sx, sy), amplitude in zip(positions, amplitudes):
+        distance = np.hypot(grid_x - sx, grid_y - sy)
+        valid = distance > 0.08
+        result[valid] += amplitude * np.exp(1j * k * distance[valid]) / (4 * np.pi * distance[valid])
+    return result
+
+line_fig, line_axes = plt.subplots(1, 2, figsize=(10, 4))
+for ax, spacing in zip(line_axes, (0.4, 0.8)):
+    line_atoms = np.column_stack([np.zeros(5), (np.arange(5) - 2) * spacing])
+    emission = scalar_field(line_atoms, np.ones(5))
+    ax.imshow(emission.real, extent=[-2, 2, -1.5, 1.5], origin='lower',
+              cmap='coolwarm', vmin=-0.5, vmax=0.5)
+    ax.scatter(line_atoms[:, 0], line_atoms[:, 1], c='#ffc87a', s=16)
+    ax.set_title(rf'5 emitters, $d={spacing}\lambda$')
+line_fig.tight_layout()
+line_fig.savefig('/tmp/qlf_line_array.png', dpi=140)
