@@ -154,3 +154,20 @@ for ax, kind in zip(geometry_axes.flat, ('line', 'square', 'circle', 'rows')):
     ax.set_title(kind)
 geometry_fig.tight_layout()
 geometry_fig.savefig('/tmp/qlf_geometries.png', dpi=140)
+
+def scalar_far_field(positions, amplitudes, angles):
+    directions = np.column_stack([np.cos(angles), np.sin(angles)])
+    phase = np.exp(-1j * k * directions @ positions.T)
+    return phase @ np.asarray(amplitudes)
+
+angles = np.linspace(-np.pi, np.pi, 721)
+far_fig = plt.figure(figsize=(7, 6))
+far_ax = far_fig.add_subplot(projection='polar')
+for kind in ('line', 'square', 'circle'):
+    atoms = array_positions(kind)
+    amplitude = scalar_far_field(atoms, np.ones(len(atoms)), angles)
+    far_ax.plot(angles, abs(amplitude) ** 2 / len(atoms) ** 2, label=kind)
+far_ax.legend(loc='lower left')
+far_fig.tight_layout()
+far_fig.savefig('/tmp/qlf_scalar_far_field.png', dpi=150)
+assert np.allclose(abs(scalar_far_field(np.zeros((1, 2)), [1], angles)) ** 2, 1)
