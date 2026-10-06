@@ -127,3 +127,30 @@ for ax, spacing in zip(line_axes, (0.4, 0.8)):
     ax.set_title(rf'5 emitters, $d={spacing}\lambda$')
 line_fig.tight_layout()
 line_fig.savefig('/tmp/qlf_line_array.png', dpi=140)
+
+def array_positions(kind, spacing=0.5):
+    if kind == 'line':
+        return np.column_stack([np.zeros(5), (np.arange(5) - 2) * spacing])
+    if kind == 'square':
+        xx, yy = np.meshgrid((np.arange(3) - 1) * spacing,
+                             (np.arange(3) - 1) * spacing)
+        return np.column_stack([xx.ravel(), yy.ravel()])
+    if kind == 'circle':
+        angle = np.arange(8) * 2 * np.pi / 8
+        return np.column_stack([spacing * np.cos(angle), spacing * np.sin(angle)])
+    if kind == 'rows':
+        xx, yy = np.meshgrid([-spacing / 2, spacing / 2],
+                             (np.arange(5) - 2) * spacing)
+        return np.column_stack([xx.ravel(), yy.ravel()])
+    raise ValueError(kind)
+
+geometry_fig, geometry_axes = plt.subplots(2, 2, figsize=(9, 7))
+for ax, kind in zip(geometry_axes.flat, ('line', 'square', 'circle', 'rows')):
+    atoms = array_positions(kind)
+    wave = scalar_field(atoms, np.ones(len(atoms)))
+    ax.imshow(wave.real, extent=[-2, 2, -1.5, 1.5], origin='lower',
+              cmap='coolwarm', vmin=-0.6, vmax=0.6)
+    ax.scatter(atoms[:, 0], atoms[:, 1], c='#ffc87a', s=14)
+    ax.set_title(kind)
+geometry_fig.tight_layout()
+geometry_fig.savefig('/tmp/qlf_geometries.png', dpi=140)
