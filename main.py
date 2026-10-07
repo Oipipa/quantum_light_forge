@@ -171,3 +171,34 @@ far_ax.legend(loc='lower left')
 far_fig.tight_layout()
 far_fig.savefig('/tmp/qlf_scalar_far_field.png', dpi=150)
 assert np.allclose(abs(scalar_far_field(np.zeros((1, 2)), [1], angles)) ** 2, 1)
+
+steering_atoms = array_positions('line', 0.4)
+steering_angles = np.linspace(-np.pi / 2, np.pi / 2, 721)
+steering_fig, steering_ax = plt.subplots(figsize=(7, 4))
+for target_deg in (-30, 0, 30):
+    target = np.deg2rad(target_deg)
+    prescribed = np.exp(1j * k * steering_atoms[:, 1] * np.sin(target))
+    pattern = abs(scalar_far_field(steering_atoms, prescribed, steering_angles)) ** 2
+    steering_ax.plot(np.rad2deg(steering_angles), pattern / pattern.max(),
+                     label=rf'target ${target_deg}^\circ$')
+    observed = np.rad2deg(steering_angles[np.argmax(pattern)])
+    assert abs(observed - target_deg) < 0.5
+steering_ax.set(xlabel='Forward observation angle (degrees)',
+                ylabel='Intensity / peak', title='Prescribed emitter phases')
+steering_ax.legend()
+steering_fig.tight_layout()
+steering_fig.savefig('/tmp/qlf_prescribed_steering.png', dpi=150)
+
+moving_fig, moving_ax = plt.subplots(figsize=(7, 4))
+moving_line, = moving_ax.plot([], [], color='#5eead4')
+moving_ax.set(xlim=(-90, 90), ylim=(0, 1.05),
+              xlabel='Observation angle (degrees)', ylabel='Intensity / peak')
+def move_beam(frame):
+    target = np.deg2rad(-35 + 70 * frame / 39)
+    prescribed = np.exp(1j * k * steering_atoms[:, 1] * np.sin(target))
+    pattern = abs(scalar_far_field(steering_atoms, prescribed, steering_angles)) ** 2
+    moving_line.set_data(np.rad2deg(steering_angles), pattern / pattern.max())
+    return (moving_line,)
+moving_animation = FuncAnimation(moving_fig, move_beam, frames=40, blit=True)
+if os.environ.get('QLF_EXPORT') == '1':
+    moving_animation.save('/tmp/qlf_prescribed_steering.gif', writer='pillow', fps=20)
