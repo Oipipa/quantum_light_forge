@@ -202,3 +202,21 @@ def move_beam(frame):
 moving_animation = FuncAnimation(moving_fig, move_beam, frames=40, blit=True)
 if os.environ.get('QLF_EXPORT') == '1':
     moving_animation.save('/tmp/qlf_prescribed_steering.gif', writer='pillow', fps=20)
+
+def polarizability(detuning, gamma_rad=1.0, gamma_total=1.0):
+    # epsilon_0 = 1, length in wavelengths, rates in radiative linewidths.
+    return -(6 * np.pi / k ** 3) * (gamma_rad / 2) / (detuning + 1j * gamma_total / 2)
+
+detunings = np.linspace(-3, 3, 601)
+alpha_values = polarizability(detunings)
+response_fig, response_axes = plt.subplots(1, 2, figsize=(9, 3.5))
+response_axes[0].plot(detunings, abs(alpha_values) ** 2)
+response_axes[0].set(xlabel=r'$\Delta/\Gamma$', ylabel=r'$|\alpha|^2$')
+response_axes[1].plot(detunings, np.angle(alpha_values))
+response_axes[1].set(xlabel=r'$\Delta/\Gamma$', ylabel=r'$\arg\alpha$ (rad)')
+response_fig.tight_layout()
+response_fig.savefig('/tmp/qlf_polarizability.png', dpi=150)
+assert np.isclose(polarizability(0).imag, 6 * np.pi / k ** 3)
+assert np.isclose(abs(polarizability(0.5)) ** 2,
+                  abs(polarizability(0)) ** 2 / 2)
+assert np.isclose((1 / polarizability(0)).imag, -k ** 3 / (6 * np.pi))
