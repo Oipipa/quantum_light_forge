@@ -220,3 +220,22 @@ assert np.isclose(polarizability(0).imag, 6 * np.pi / k ** 3)
 assert np.isclose(abs(polarizability(0.5)) ** 2,
                   abs(polarizability(0)) ** 2 / 2)
 assert np.isclose((1 / polarizability(0)).imag, -k ** 3 / (6 * np.pi))
+
+atomic_line = array_positions('line', 0.55)
+incident_at_atoms = np.exp(1j * k * atomic_line[:, 0])
+independent_dipoles = polarizability(0.4) * incident_at_atoms
+independent_scattered = scalar_field(atomic_line, k ** 2 * independent_dipoles)
+independent_far = scalar_far_field(atomic_line, k ** 2 * independent_dipoles,
+                                   steering_angles)
+independent_fig, independent_axes = plt.subplots(1, 2, figsize=(10, 4))
+independent_axes[0].imshow(abs(field + independent_scattered) ** 2,
+                           extent=[-2, 2, -1.5, 1.5], origin='lower', cmap='magma',
+                           vmin=0, vmax=6)
+independent_axes[0].scatter(atomic_line[:, 0], atomic_line[:, 1],
+                            c='#5eead4', s=15)
+independent_axes[0].set_title('Independent atomic response')
+independent_axes[1].plot(np.rad2deg(steering_angles), abs(independent_far) ** 2)
+independent_axes[1].set(xlabel='Observation angle (degrees)',
+                         ylabel='Scalar far-field intensity')
+independent_fig.tight_layout()
+independent_fig.savefig('/tmp/qlf_independent_atoms.png', dpi=150)
