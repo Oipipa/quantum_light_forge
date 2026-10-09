@@ -239,3 +239,33 @@ independent_axes[1].set(xlabel='Observation angle (degrees)',
                          ylabel='Scalar far-field intensity')
 independent_fig.tight_layout()
 independent_fig.savefig('/tmp/qlf_independent_atoms.png', dpi=150)
+
+def scalar_coupling_matrix(positions):
+    displacement = positions[:, None, :] - positions[None, :, :]
+    distance = np.linalg.norm(displacement, axis=-1)
+    matrix = np.zeros(distance.shape, dtype=complex)
+    mask = ~np.eye(len(positions), dtype=bool)
+    matrix[mask] = k ** 2 * np.exp(1j * k * distance[mask]) / (4 * np.pi * distance[mask])
+    return matrix
+
+def solve_scalar(positions, detuning):
+    alpha = np.broadcast_to(polarizability(detuning), len(positions))
+    incident = np.exp(1j * k * positions[:, 0])
+    matrix = np.eye(len(positions)) - alpha[:, None] * scalar_coupling_matrix(positions)
+    dipoles = np.linalg.solve(matrix, alpha * incident)
+    return dipoles, matrix
+
+cooperative_dipoles, scalar_matrix = solve_scalar(atomic_line, 0.4)
+assert np.linalg.norm(scalar_matrix @ cooperative_dipoles
+                      - polarizability(0.4) * incident_at_atoms) < 1e-12
+cooperative_far = scalar_far_field(atomic_line, k ** 2 * cooperative_dipoles,
+                                   steering_angles)
+coupling_fig, coupling_ax = plt.subplots(figsize=(7, 4))
+coupling_ax.plot(np.rad2deg(steering_angles), abs(independent_far) ** 2,
+                 label='Independent')
+coupling_ax.plot(np.rad2deg(steering_angles), abs(cooperative_far) ** 2,
+                 label='Coupled')
+coupling_ax.set(xlabel='Observation angle (degrees)', ylabel='Scalar intensity')
+coupling_ax.legend()
+coupling_fig.tight_layout()
+coupling_fig.savefig('/tmp/qlf_scalar_coupling.png', dpi=150)
