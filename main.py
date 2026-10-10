@@ -269,3 +269,26 @@ coupling_ax.set(xlabel='Observation angle (degrees)', ylabel='Scalar intensity')
 coupling_ax.legend()
 coupling_fig.tight_layout()
 coupling_fig.savefig('/tmp/qlf_scalar_coupling.png', dpi=150)
+
+spectrum_detunings = np.linspace(-2, 2, 161)
+independent_spectrum = []
+cooperative_spectrum = []
+for detuning in spectrum_detunings:
+    independent = polarizability(detuning) * incident_at_atoms
+    cooperative, _ = solve_scalar(atomic_line, detuning)
+    independent_spectrum.append(np.trapezoid(
+        abs(scalar_far_field(atomic_line, independent, steering_angles)) ** 2,
+        steering_angles))
+    cooperative_spectrum.append(np.trapezoid(
+        abs(scalar_far_field(atomic_line, cooperative, steering_angles)) ** 2,
+        steering_angles))
+spectrum_fig, spectrum_ax = plt.subplots(figsize=(7, 4))
+spectrum_ax.plot(spectrum_detunings, independent_spectrum, label='Independent')
+spectrum_ax.plot(spectrum_detunings, cooperative_spectrum, label='Cooperative')
+spectrum_ax.set(xlabel=r'$\Delta/\Gamma$', ylabel='Angle-integrated scalar response')
+spectrum_ax.legend()
+spectrum_fig.tight_layout()
+spectrum_fig.savefig('/tmp/qlf_scalar_spectrum.png', dpi=150)
+print('Scalar spectral peaks:',
+      spectrum_detunings[np.argmax(independent_spectrum)],
+      spectrum_detunings[np.argmax(cooperative_spectrum)])
