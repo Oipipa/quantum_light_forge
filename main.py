@@ -292,3 +292,23 @@ spectrum_fig.savefig('/tmp/qlf_scalar_spectrum.png', dpi=150)
 print('Scalar spectral peaks:',
       spectrum_detunings[np.argmax(independent_spectrum)],
       spectrum_detunings[np.argmax(cooperative_spectrum)])
+
+spacing_fig, spacing_axes = plt.subplots(1, 2, figsize=(10, 4))
+for spacing in (0.35, 0.55, 0.8):
+    positions = array_positions('line', spacing)
+    dipoles, _ = solve_scalar(positions, 0.4)
+    pattern = abs(scalar_far_field(positions, dipoles, steering_angles)) ** 2
+    spacing_axes[0].plot(np.rad2deg(steering_angles), pattern,
+                         label=rf'$d={spacing}\lambda$')
+    scan = []
+    for detuning in spectrum_detunings:
+        trial, _ = solve_scalar(positions, detuning)
+        scan.append(np.trapezoid(abs(scalar_far_field(positions, trial,
+                                steering_angles)) ** 2, steering_angles))
+    spacing_axes[1].plot(spectrum_detunings, scan, label=rf'$d={spacing}\lambda$')
+spacing_axes[0].set(xlabel='Observation angle (degrees)', ylabel='Intensity')
+spacing_axes[1].set(xlabel=r'$\Delta/\Gamma$', ylabel='Integrated response')
+for ax in spacing_axes:
+    ax.legend()
+spacing_fig.tight_layout()
+spacing_fig.savefig('/tmp/qlf_spacing.png', dpi=150)
