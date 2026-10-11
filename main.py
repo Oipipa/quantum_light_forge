@@ -312,3 +312,19 @@ for ax in spacing_axes:
     ax.legend()
 spacing_fig.tight_layout()
 spacing_fig.savefig('/tmp/qlf_spacing.png', dpi=150)
+
+from scipy.linalg import lstsq
+
+check_positions = array_positions('square', 0.55)
+check_dipoles, check_matrix = solve_scalar(check_positions, 0.25)
+check_rhs = polarizability(0.25) * np.exp(1j * k * check_positions[:, 0])
+least_squares, _, _, _ = lstsq(check_matrix, check_rhs)
+relative_residual = np.linalg.norm(check_matrix @ check_dipoles - check_rhs) / np.linalg.norm(check_rhs)
+condition_number = np.linalg.cond(check_matrix)
+assert relative_residual < 1e-12
+assert np.allclose(check_dipoles, least_squares, rtol=1e-11, atol=1e-12)
+single_dipole, single_matrix = solve_scalar(np.array([[0.0, 0.0]]), 0.25)
+assert np.isclose(single_dipole[0], polarizability(0.25))
+assert np.array_equal(single_matrix, np.eye(1))
+assert np.allclose(np.linalg.solve(np.eye(len(check_rhs)), check_rhs), check_rhs)
+print(f'Scalar solver residual={relative_residual:.2e}, condition={condition_number:.2f}')
