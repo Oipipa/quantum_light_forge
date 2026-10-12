@@ -328,3 +328,38 @@ assert np.isclose(single_dipole[0], polarizability(0.25))
 assert np.array_equal(single_matrix, np.eye(1))
 assert np.allclose(np.linalg.solve(np.eye(len(check_rhs)), check_rhs), check_rhs)
 print(f'Scalar solver residual={relative_residual:.2e}, condition={condition_number:.2f}')
+
+def green_tensor(displacement):
+    displacement = np.asarray(displacement, dtype=float)
+    radius = np.linalg.norm(displacement, axis=-1)
+    if np.any(radius == 0):
+        raise ValueError('Green tensor is undefined at the source')
+    direction = displacement / radius[..., None]
+    kr = k * radius
+    identity = np.eye(3)
+    radial = direction[..., :, None] * direction[..., None, :]
+    transverse_coefficient = 1 + 1j / kr - 1 / kr ** 2
+    radial_coefficient = -1 - 3j / kr + 3 / kr ** 2
+    return (np.exp(1j * kr) / (4 * np.pi * radius))[..., None, None] * (
+        transverse_coefficient[..., None, None] * identity
+        + radial_coefficient[..., None, None] * radial)
+
+def dipole_field(displacement, dipole):
+    return k ** 2 * np.einsum('...ab,b->...a', green_tensor(displacement), dipole)
+
+polar_angles = np.linspace(0, np.pi, 361)
+directions_3d = np.column_stack([np.sin(polar_angles),
+                                  np.zeros_like(polar_angles), np.cos(polar_angles)])
+z_polarized = np.array([0.0, 0.0, 1.0])
+transverse = z_polarized - directions_3d * (directions_3d @ z_polarized)[:, None]
+vector_pattern = np.sum(abs(transverse) ** 2, axis=1)
+assert np.allclose(vector_pattern, np.sin(polar_angles) ** 2)
+assert vector_pattern[0] < 1e-12 and np.isclose(vector_pattern[180], 1)
+vector_fig, vector_ax = plt.subplots(figsize=(6, 4))
+vector_ax.plot(np.rad2deg(polar_angles), vector_pattern, label='Vector dipole')
+vector_ax.plot(np.rad2deg(polar_angles), np.ones_like(polar_angles), '--',
+               label='Scalar emitter')
+vector_ax.set(xlabel='Angle from dipole axis (degrees)', ylabel='Far-field intensity / peak')
+vector_ax.legend()
+vector_fig.tight_layout()
+vector_fig.savefig('/tmp/qlf_vector_dipole.png', dpi=150)
