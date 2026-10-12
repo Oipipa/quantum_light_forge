@@ -338,9 +338,9 @@ def green_tensor(displacement):
     kr = k * radius
     identity = np.eye(3)
     radial = direction[..., :, None] * direction[..., None, :]
-    transverse_coefficient = 1 + 1j / kr - 1 / kr ** 2
-    radial_coefficient = -1 - 3j / kr + 3 / kr ** 2
-    return (np.exp(1j * kr) / (4 * np.pi * radius))[..., None, None] * (
+    transverse_coefficient = np.asarray(1 + 1j / kr - 1 / kr ** 2)
+    radial_coefficient = np.asarray(-1 - 3j / kr + 3 / kr ** 2)
+    return np.asarray(np.exp(1j * kr) / (4 * np.pi * radius))[..., None, None] * (
         transverse_coefficient[..., None, None] * identity
         + radial_coefficient[..., None, None] * radial)
 
@@ -363,3 +363,63 @@ vector_ax.set(xlabel='Angle from dipole axis (degrees)', ylabel='Far-field inten
 vector_ax.legend()
 vector_fig.tight_layout()
 vector_fig.savefig('/tmp/qlf_vector_dipole.png', dpi=150)
+
+def to_3d(positions):
+    return np.column_stack([positions, np.zeros(len(positions))])
+
+def solve_vector(positions, detuning, coupling=True):
+    # Fixed z-oriented transition: solve only the projected z component.
+    positions = np.asarray(positions, dtype=float)
+    alpha = np.broadcast_to(polarizability(detuning), len(positions))
+    incoming = np.exp(1j * k * positions[:, 0])
+    matrix = np.eye(len(positions), dtype=complex)
+    if coupling:
+        for i in range(len(positions)):
+            for j in range(len(positions)):
+                if i != j:
+                    matrix[i, j] -= alpha[i] * k ** 2 * green_tensor(positions[i] - positions[j])[2, 2]
+    dipoles = np.linalg.solve(matrix, alpha * incoming)
+    residual = np.linalg.norm(matrix @ dipoles - alpha * incoming) / np.linalg.norm(alpha * incoming)
+    return dipoles, residual, np.linalg.cond(matrix)
+
+def vector_scattered_field(points, positions, dipoles, exclusion=0.08):
+    result = np.zeros(points.shape, dtype=complex)
+    valid = np.ones(points.shape[:-1], dtype=bool)
+    for atom, amplitude in zip(positions, dipoles):
+        displacement = points - atom
+        radius = np.linalg.norm(displacement, axis=-1)
+        valid &= radius > exclusion
+        safe_displacement = displacement.copy()
+        safe_displacement[radius <= exclusion] = [exclusion, 0, 0]
+        result += k ** 2 * np.einsum('...ab,b->...a', green_tensor(safe_displacement),
+                                     np.array([0, 0, amplitude]))
+    result[~valid] = np.nan
+    return result
+
+def vector_far_field(positions, dipoles, directions):
+    moments = np.column_stack([np.zeros(len(dipoles)), np.zeros(len(dipoles)), dipoles])
+    phases = np.exp(-1j * k * directions @ positions.T)
+    summed = phases @ moments
+    return summed - directions * np.sum(directions * summed, axis=-1)[:, None]
+
+vector_atoms = to_3d(array_positions('square', 0.55))
+vector_dipoles, vector_residual, vector_condition = solve_vector(vector_atoms, 0.2)
+assert vector_residual < 1e-12
+view_x, view_y = np.meshgrid(np.linspace(-2, 2, 241), np.linspace(-1.5, 1.5, 181))
+view_points = np.stack([view_x, view_y, np.zeros_like(view_x)], axis=-1)
+vector_scattered = vector_scattered_field(view_points, vector_atoms, vector_dipoles)
+vector_total_z = np.exp(1j * k * view_x) + vector_scattered[..., 2]
+forward_directions = np.column_stack([np.cos(steering_angles),
+                                      np.sin(steering_angles), np.zeros_like(steering_angles)])
+vector_angular = np.sum(abs(vector_far_field(vector_atoms, vector_dipoles,
+                                             forward_directions)) ** 2, axis=1)
+vector_gate_fig, vector_gate_axes = plt.subplots(1, 2, figsize=(11, 4))
+vector_gate_axes[0].imshow(np.real(vector_total_z), extent=[-2, 2, -1.5, 1.5],
+                           origin='lower', cmap='coolwarm', vmin=-2, vmax=2)
+vector_gate_axes[0].scatter(vector_atoms[:, 0], vector_atoms[:, 1], c='#ffc87a', s=15)
+vector_gate_axes[0].set_title(r'$\mathrm{Re}(E_z)$, coupled vector dipoles')
+vector_gate_axes[1].plot(np.rad2deg(steering_angles), vector_angular)
+vector_gate_axes[1].set(xlabel='Forward angle (degrees)', ylabel='Transverse far-field intensity')
+vector_gate_fig.tight_layout()
+vector_gate_fig.savefig('/tmp/qlf_vector_coupled.png', dpi=150)
+print(f'Vector solver residual={vector_residual:.2e}, condition={vector_condition:.2f}')
