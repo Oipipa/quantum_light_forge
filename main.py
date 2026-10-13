@@ -423,3 +423,21 @@ vector_gate_axes[1].set(xlabel='Forward angle (degrees)', ylabel='Transverse far
 vector_gate_fig.tight_layout()
 vector_gate_fig.savefig('/tmp/qlf_vector_coupled.png', dpi=150)
 print(f'Vector solver residual={vector_residual:.2e}, condition={vector_condition:.2f}')
+
+def plot_dipoles(ax, positions, dipoles, mode='phase'):
+    values = np.angle(dipoles) if mode == 'phase' else abs(dipoles)
+    colors = 'twilight' if mode == 'phase' else 'viridis'
+    limits = (-np.pi, np.pi) if mode == 'phase' else (0, max(values) * 1.05)
+    return ax.scatter(positions[:, 0], positions[:, 1], c=values, s=170,
+                      cmap=colors, vmin=limits[0], vmax=limits[1], edgecolors='white')
+
+phase_fig, phase_axes = plt.subplots(2, 2, figsize=(8, 7))
+for row, detuning in enumerate((-0.6, 0.6)):
+    moments, _, _ = solve_vector(vector_atoms, detuning)
+    for col, mode in enumerate(('amplitude', 'phase')):
+        image = plot_dipoles(phase_axes[row, col], vector_atoms, moments, mode)
+        phase_axes[row, col].set(xlim=(-1, 1), ylim=(-1, 1), aspect='equal',
+                                 title=rf'$\Delta={detuning}\Gamma$, {mode}')
+        phase_fig.colorbar(image, ax=phase_axes[row, col], shrink=0.75)
+phase_fig.tight_layout()
+phase_fig.savefig('/tmp/qlf_dipole_maps.png', dpi=150)
