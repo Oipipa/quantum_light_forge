@@ -441,3 +441,22 @@ for row, detuning in enumerate((-0.6, 0.6)):
         phase_fig.colorbar(image, ax=phase_axes[row, col], shrink=0.75)
 phase_fig.tight_layout()
 phase_fig.savefig('/tmp/qlf_dipole_maps.png', dpi=150)
+
+steer_atoms = to_3d(np.column_stack([np.zeros(9), (np.arange(9) - 4) * 0.35]))
+gradient_fig, gradient_ax = plt.subplots(figsize=(7, 4))
+gradient_peaks = {}
+for gradient in (-0.7, 0.0, 0.7):
+    local_detuning = 0.2 + gradient * steer_atoms[:, 1]
+    moments, residual, condition = solve_vector(steer_atoms, local_detuning)
+    radiation = vector_far_field(steer_atoms, moments, forward_directions)
+    intensity = np.sum(abs(radiation) ** 2, axis=1)
+    peak_angle = np.rad2deg(steering_angles[np.argmax(intensity)])
+    gradient_peaks[gradient] = peak_angle
+    gradient_ax.plot(np.rad2deg(steering_angles), intensity,
+                     label=rf'gradient ${gradient:+.1f}\Gamma/\lambda$')
+    assert residual < 1e-12 and condition < 1e5
+gradient_ax.set(xlabel='Forward angle (degrees)', ylabel='Vector far-field intensity')
+gradient_ax.legend()
+gradient_fig.tight_layout()
+gradient_fig.savefig('/tmp/qlf_detuning_steering.png', dpi=150)
+print('Detuning-gradient peak angles:', gradient_peaks)
