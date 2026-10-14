@@ -460,3 +460,52 @@ gradient_ax.legend()
 gradient_fig.tight_layout()
 gradient_fig.savefig('/tmp/qlf_detuning_steering.png', dpi=150)
 print('Detuning-gradient peak angles:', gradient_peaks)
+
+from scipy.optimize import differential_evolution
+
+focus_atoms = to_3d(array_positions('line', 0.45))
+focus_target = np.array([1.6, 0.25, 0.0])
+focus_incoming = np.exp(1j * k * focus_atoms[:, 0])
+focus_coupling = np.zeros((len(focus_atoms), len(focus_atoms)), dtype=complex)
+for i in range(len(focus_atoms)):
+    for j in range(len(focus_atoms)):
+        if i != j:
+            focus_coupling[i, j] = k ** 2 * green_tensor(focus_atoms[i] - focus_atoms[j])[2, 2]
+target_green = np.array([k ** 2 * green_tensor(focus_target - atom)[2, 2]
+                         for atom in focus_atoms])
+
+def focus_dipoles(local_detunings):
+    alpha = polarizability(np.asarray(local_detunings))
+    matrix = np.eye(len(alpha)) - alpha[:, None] * focus_coupling
+    return np.linalg.solve(matrix, alpha * focus_incoming)
+
+def focus_intensity(local_detunings):
+    moments = focus_dipoles(local_detunings)
+    field_at_target = np.exp(1j * k * focus_target[0]) + target_green @ moments
+    return abs(field_at_target) ** 2
+
+baseline_detunings = np.full(len(focus_atoms), 0.2)
+baseline_focus = focus_intensity(baseline_detunings)
+optimization = differential_evolution(lambda values: -focus_intensity(values),
+                                      [(-2, 2)] * len(focus_atoms),
+                                      seed=42, maxiter=25, popsize=6, tol=1e-5)
+optimized_focus = focus_intensity(optimization.x)
+assert optimized_focus > baseline_focus
+focus_profile_y = np.linspace(-1.2, 1.2, 241)
+focus_profile_points = np.column_stack([np.full_like(focus_profile_y, focus_target[0]),
+                                        focus_profile_y, np.zeros_like(focus_profile_y)])
+focus_fig, focus_ax = plt.subplots(figsize=(7, 4))
+for label, detuning_choice in [('Uniform', baseline_detunings),
+                                ('Optimized', optimization.x)]:
+    moments = focus_dipoles(detuning_choice)
+    scattered_profile = vector_scattered_field(focus_profile_points,
+                                                focus_atoms, moments)[:, 2]
+    intensity = abs(np.exp(1j * k * focus_target[0]) + scattered_profile) ** 2
+    focus_ax.plot(focus_profile_y, intensity, label=label)
+focus_ax.axvline(focus_target[1], color='white', linestyle=':')
+focus_ax.set(xlabel=r'$y/\lambda$ at $x=1.6\lambda$', ylabel=r'$|E_z|^2$')
+focus_ax.legend()
+focus_fig.tight_layout()
+focus_fig.savefig('/tmp/qlf_focus.png', dpi=150)
+print(f'Focus intensity: {baseline_focus:.4f} -> {optimized_focus:.4f}, '
+      f'factor {optimized_focus/baseline_focus:.3f}')
