@@ -509,3 +509,36 @@ focus_fig.tight_layout()
 focus_fig.savefig('/tmp/qlf_focus.png', dpi=150)
 print(f'Focus intensity: {baseline_focus:.4f} -> {optimized_focus:.4f}, '
       f'factor {optimized_focus/baseline_focus:.3f}')
+
+from matplotlib.widgets import Slider
+
+plt.close('all')
+steering_demo, steering_panels = plt.subplots(1, 3, figsize=(12, 4))
+steering_demo.subplots_adjust(bottom=0.22)
+slider_axis = steering_demo.add_axes([0.22, 0.06, 0.56, 0.04])
+gradient_slider = Slider(slider_axis, 'Detuning gradient', -1.0, 1.0, valinit=0.0)
+demo_field = steering_panels[0].imshow(np.zeros_like(view_x),
+                                       extent=[-2, 2, -1.5, 1.5], origin='lower',
+                                       cmap='coolwarm', vmin=-2, vmax=2)
+steering_panels[0].scatter(steer_atoms[:, 0], steer_atoms[:, 1], c='#ffc87a', s=12)
+demo_phases = plot_dipoles(steering_panels[1], steer_atoms, np.ones(len(steer_atoms)))
+demo_far, = steering_panels[2].plot([], [], color='#5eead4')
+steering_panels[0].set_title(r'$\mathrm{Re}(E_z)$')
+steering_panels[1].set_title('Calculated dipole phase')
+steering_panels[2].set(xlim=(-90, 90), xlabel='Far-field angle (degrees)',
+                       ylabel='Intensity')
+
+def update_steering(value):
+    moments, _, _ = solve_vector(steer_atoms, 0.2 + value * steer_atoms[:, 1])
+    scattered_now = vector_scattered_field(view_points, steer_atoms, moments)[..., 2]
+    demo_field.set_data(np.real(np.exp(1j * k * view_x) + scattered_now))
+    demo_phases.set_array(np.angle(moments))
+    intensity = np.sum(abs(vector_far_field(steer_atoms, moments,
+                                             forward_directions)) ** 2, axis=1)
+    demo_far.set_data(np.rad2deg(steering_angles), intensity)
+    steering_panels[2].set_ylim(0, intensity.max() * 1.05)
+    steering_demo.canvas.draw_idle()
+
+gradient_slider.on_changed(update_steering)
+update_steering(0.0)
+steering_demo.savefig('/tmp/qlf_steering_demo.png', dpi=150)
