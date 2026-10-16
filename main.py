@@ -542,3 +542,37 @@ def update_steering(value):
 gradient_slider.on_changed(update_steering)
 update_steering(0.0)
 steering_demo.savefig('/tmp/qlf_steering_demo.png', dpi=150)
+
+rng = np.random.default_rng(23)
+defect_cases = {
+    'Perfect': (steer_atoms, np.full(len(steer_atoms), 0.2)),
+    'Missing atom': (np.delete(steer_atoms, 2, axis=0), np.full(len(steer_atoms)-1, 0.2)),
+    'Position disorder': (steer_atoms + np.column_stack([
+        rng.normal(0, 0.03, len(steer_atoms)),
+        rng.normal(0, 0.03, len(steer_atoms)),
+        np.zeros(len(steer_atoms))]), np.full(len(steer_atoms), 0.2)),
+    'Detuning defect': (steer_atoms, 0.2 + np.where(np.arange(len(steer_atoms)) == 2, 0.8, 0.0)),
+}
+defect_fig, defect_axes = plt.subplots(1, 2, figsize=(10, 4))
+for label, (positions, local_detuning) in defect_cases.items():
+    moments, _, _ = solve_vector(positions, local_detuning)
+    angular = np.sum(abs(vector_far_field(positions, moments,
+                                           forward_directions)) ** 2, axis=1)
+    defect_axes[0].plot(np.rad2deg(steering_angles), angular, label=label)
+    spectrum = []
+    for frequency in np.linspace(-1, 1, 61):
+        trial, _, _ = solve_vector(positions, local_detuning + frequency)
+        pattern = vector_far_field(positions, trial, forward_directions)
+        spectrum.append(np.trapezoid(np.sum(abs(pattern) ** 2, axis=1), steering_angles))
+    defect_axes[1].plot(np.linspace(-1, 1, 61), spectrum, label=label)
+    at_focus = (np.exp(1j*k*focus_target[0])
+                + vector_scattered_field(focus_target[None, :], positions,
+                                         moments)[0, 2])
+    print(f'{label}: peak angle {np.rad2deg(steering_angles[np.argmax(angular)]):.2f}, '
+          f'focus intensity {abs(at_focus)**2:.3f}')
+defect_axes[0].set(xlabel='Forward angle (degrees)', ylabel='Intensity')
+defect_axes[1].set(xlabel=r'Extra $\Delta/\Gamma$', ylabel='Integrated response')
+for ax in defect_axes:
+    ax.legend(fontsize=8)
+defect_fig.tight_layout()
+defect_fig.savefig('/tmp/qlf_defects.png', dpi=150)
