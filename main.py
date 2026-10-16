@@ -576,3 +576,22 @@ for ax in defect_axes:
     ax.legend(fontsize=8)
 defect_fig.tight_layout()
 defect_fig.savefig('/tmp/qlf_defects.png', dpi=150)
+
+ancilla_location = np.array([0.0, 0.35, 0.8])
+distance_to_ancilla = np.linalg.norm(steer_atoms - ancilla_location, axis=1)
+conditional_shift = 1.5 / (1 + (distance_to_ancilla / 0.8) ** 6)
+conditional_fig, conditional_axes = plt.subplots(1, 2, figsize=(10, 4))
+for label, shift in [('Ancilla off', np.zeros(len(steer_atoms))),
+                     ('Effective ancilla on', conditional_shift)]:
+    moments, _, _ = solve_vector(steer_atoms, 0.2 + shift)
+    pattern = np.sum(abs(vector_far_field(steer_atoms, moments,
+                                           forward_directions)) ** 2, axis=1)
+    conditional_axes[0].plot(np.rad2deg(steering_angles), pattern, label=label)
+    conditional_axes[1].plot(steer_atoms[:, 1], abs(moments), 'o-', label=label)
+conditional_axes[0].set(xlabel='Forward angle (degrees)', ylabel='Intensity')
+conditional_axes[1].set(xlabel=r'Atom $y/\lambda$', ylabel='Dipole amplitude')
+for ax in conditional_axes:
+    ax.legend()
+conditional_fig.tight_layout()
+conditional_fig.savefig('/tmp/qlf_conditional.png', dpi=150)
+print('Conditional detuning shifts:', np.round(conditional_shift, 3))
