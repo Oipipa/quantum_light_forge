@@ -595,3 +595,159 @@ for ax in conditional_axes:
 conditional_fig.tight_layout()
 conditional_fig.savefig('/tmp/qlf_conditional.png', dpi=150)
 print('Conditional detuning shifts:', np.round(conditional_shift, 3))
+
+from matplotlib.widgets import Button, CheckButtons, RadioButtons
+
+plt.close('all')
+dashboard = plt.figure(figsize=(14, 8), facecolor='#081322')
+layout = dashboard.add_gridspec(3, 4, left=0.05, right=0.76,
+                                bottom=0.16, top=0.93, wspace=0.48, hspace=0.55)
+field_ax = dashboard.add_subplot(layout[:, :2])
+atom_ax = dashboard.add_subplot(layout[0, 2:])
+spectrum_ax = dashboard.add_subplot(layout[1, 2:])
+radiation_ax = dashboard.add_subplot(layout[2, 2:])
+field_image = field_ax.imshow(np.zeros_like(view_x), extent=[-2, 2, -1.5, 1.5],
+                              origin='lower', cmap='coolwarm', vmin=-2, vmax=2)
+atom_image = atom_ax.scatter([], [], c=[], cmap='twilight', vmin=-np.pi,
+                              vmax=np.pi, s=75)
+spectrum_line, = spectrum_ax.plot([], [], color='#c18cff')
+spectrum_marker = spectrum_ax.axvline(0, color='#ffc87a', linestyle=':')
+radiation_line, = radiation_ax.plot([], [], color='#5eead4')
+dashboard_cache = {}
+dashboard_state = {'phase': 0.0, 'playing': True, 'fields': None, 'positions': None,
+                   'dipoles': None, 'spectrum': None, 'radiation': None}
+
+def dashboard_positions(kind, count, spacing):
+    if kind == 'Line':
+        return to_3d(np.column_stack([np.zeros(count),
+                                      (np.arange(count) - (count - 1) / 2) * spacing]))
+    if kind == 'Square':
+        side = max(2, int(np.ceil(np.sqrt(count))))
+        xx, yy = np.meshgrid((np.arange(side) - (side - 1) / 2) * spacing,
+                             (np.arange(side) - (side - 1) / 2) * spacing)
+        return to_3d(np.column_stack([xx.ravel(), yy.ravel()])[:count])
+    if kind == 'Circle':
+        azimuth = np.arange(count) * 2 * np.pi / count
+        return to_3d(np.column_stack([spacing * np.cos(azimuth),
+                                      spacing * np.sin(azimuth)]))
+    xx, yy = np.meshgrid([-spacing / 2, spacing / 2],
+                         (np.arange(int(np.ceil(count / 2)))
+                          - (int(np.ceil(count / 2)) - 1) / 2) * spacing)
+    return to_3d(np.column_stack([xx.ravel(), yy.ravel()])[:count])
+
+def dashboard_calculate(kind, count, spacing, detuning, gradient, defect):
+    key = (kind, count, spacing, detuning, gradient, defect)
+    if key in dashboard_cache:
+        return dashboard_cache[key]
+    positions = dashboard_positions(kind, count, spacing)
+    if defect and len(positions) > 2:
+        positions = np.delete(positions, 1, axis=0)
+    local = detuning + gradient * positions[:, 1]
+    moments, residual, condition = solve_vector(positions, local)
+    if residual > 1e-9 or condition > 1e8:
+        raise RuntimeError('Coupled-dipole solve is poorly conditioned')
+    scattered_z = vector_scattered_field(view_points, positions, moments)[..., 2]
+    incident_z = np.exp(1j * k * view_x)
+    spec = []
+    for frequency in np.linspace(-2, 2, 81):
+        test, _, _ = solve_vector(positions, local + frequency)
+        pattern = vector_far_field(positions, test, forward_directions)
+        spec.append(np.trapezoid(np.sum(abs(pattern) ** 2, axis=1), steering_angles))
+    pattern = vector_far_field(positions, moments, forward_directions)
+    angular = np.sum(abs(pattern) ** 2, axis=1)
+    result = (positions, moments, incident_z, scattered_z, np.asarray(spec), angular)
+    dashboard_cache[key] = result
+    return result
+
+space_slider = Slider(dashboard.add_axes([0.08, 0.105, 0.18, 0.025]),
+                      'Spacing', 0.25, 0.8, valinit=0.45)
+number_slider = Slider(dashboard.add_axes([0.32, 0.105, 0.17, 0.025]),
+                       'Atoms', 3, 16, valinit=9, valstep=1)
+detuning_slider = Slider(dashboard.add_axes([0.08, 0.055, 0.18, 0.025]),
+                         'Detuning', -2, 2, valinit=0.2)
+gradient_control = Slider(dashboard.add_axes([0.32, 0.055, 0.17, 0.025]),
+                          'Gradient', -1, 1, valinit=0)
+speed_slider = Slider(dashboard.add_axes([0.55, 0.105, 0.16, 0.025]),
+                      'Speed', 0.2, 3, valinit=1)
+geometry_control = RadioButtons(dashboard.add_axes([0.79, 0.72, 0.19, 0.21]),
+                                ('Line', 'Square', 'Circle', 'Rows'))
+field_control = RadioButtons(dashboard.add_axes([0.79, 0.49, 0.19, 0.19]),
+                             ('Total', 'Scattered', 'Incident'))
+mode_control = RadioButtons(dashboard.add_axes([0.79, 0.29, 0.19, 0.17]),
+                            ('Real', 'Intensity', 'Phase'))
+defect_control = CheckButtons(dashboard.add_axes([0.79, 0.22, 0.19, 0.05]),
+                              ['Missing atom'], [False])
+run_button = Button(dashboard.add_axes([0.53, 0.04, 0.08, 0.04]), 'Update')
+play_button = Button(dashboard.add_axes([0.62, 0.04, 0.08, 0.04]), 'Pause')
+restart_button = Button(dashboard.add_axes([0.71, 0.04, 0.08, 0.04]), 'Restart')
+
+def dashboard_draw():
+    if dashboard_state['fields'] is None:
+        return
+    incident_z, scattered_z = dashboard_state['fields']
+    selected = {'Incident': incident_z, 'Scattered': scattered_z,
+                'Total': incident_z + scattered_z}[field_control.value_selected]
+    mode = mode_control.value_selected
+    if mode == 'Real':
+        values = np.real(selected * np.exp(-1j * dashboard_state['phase']))
+        limit = max(1, np.nanpercentile(abs(values), 99))
+        field_image.set(cmap='coolwarm', clim=(-limit, limit))
+    elif mode == 'Intensity':
+        values = abs(selected) ** 2
+        field_image.set(cmap='magma', clim=(0, max(1, np.nanpercentile(values, 99))))
+    else:
+        values = np.angle(selected)
+        field_image.set(cmap='twilight', clim=(-np.pi, np.pi))
+    field_image.set_data(values)
+    field_ax.set_title(f'{field_control.value_selected} {mode.lower()} ' +
+                       (r'$E_z$' if mode == 'Real' else 'field'))
+    dashboard.canvas.draw_idle()
+
+def dashboard_run(_=None):
+    state = dashboard_calculate(geometry_control.value_selected,
+                                int(number_slider.val), round(space_slider.val, 3),
+                                round(detuning_slider.val, 3),
+                                round(gradient_control.val, 3),
+                                defect_control.get_status()[0])
+    positions, moments, incident_z, scattered_z, spec, angular = state
+    dashboard_state.update(positions=positions, dipoles=moments,
+                           fields=(incident_z, scattered_z), spectrum=spec,
+                           radiation=angular)
+    atom_image.set_offsets(positions[:, :2])
+    atom_image.set_array(np.angle(moments))
+    atom_image.set_sizes(50 + 170 * abs(moments) / max(abs(moments)))
+    atom_ax.set(xlim=(-1.8, 1.8), ylim=(-1.4, 1.4),
+                title='Atomic dipole phase and amplitude')
+    spectrum_line.set_data(np.linspace(-2, 2, len(spec)), spec)
+    spectrum_ax.relim(); spectrum_ax.autoscale_view()
+    spectrum_ax.set(xlabel=r'Extra $\Delta/\Gamma$', ylabel='Response')
+    spectrum_marker.set_xdata([0, 0])
+    radiation_line.set_data(np.rad2deg(steering_angles), angular)
+    radiation_ax.set(xlim=(-90, 90), ylim=(0, 1.05 * max(angular)),
+                      xlabel='Far-field angle', ylabel='Intensity')
+    dashboard_draw()
+
+def dashboard_tick(frame):
+    if dashboard_state['playing']:
+        dashboard_state['phase'] += 2 * np.pi * 0.03 * speed_slider.val
+        if mode_control.value_selected == 'Real':
+            dashboard_draw()
+    return (field_image,)
+
+def dashboard_play(_):
+    dashboard_state['playing'] = not dashboard_state['playing']
+    play_button.label.set_text('Pause' if dashboard_state['playing'] else 'Play')
+
+def dashboard_restart(_):
+    dashboard_state['phase'] = 0.0
+    dashboard_draw()
+
+run_button.on_clicked(dashboard_run)
+play_button.on_clicked(dashboard_play)
+restart_button.on_clicked(dashboard_restart)
+field_control.on_clicked(lambda _: dashboard_draw())
+mode_control.on_clicked(lambda _: dashboard_draw())
+dashboard_run()
+dashboard_animation = FuncAnimation(dashboard, dashboard_tick, frames=None,
+                                    interval=35, blit=False, cache_frame_data=False)
+dashboard.savefig('/tmp/qlf_dashboard.png', dpi=150)
