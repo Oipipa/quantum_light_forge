@@ -329,13 +329,13 @@ assert np.array_equal(single_matrix, np.eye(1))
 assert np.allclose(np.linalg.solve(np.eye(len(check_rhs)), check_rhs), check_rhs)
 print(f'Scalar solver residual={relative_residual:.2e}, condition={condition_number:.2f}')
 
-def green_tensor(displacement):
+def green_tensor(displacement, wave_number=k):
     displacement = np.asarray(displacement, dtype=float)
     radius = np.linalg.norm(displacement, axis=-1)
     if np.any(radius == 0):
         raise ValueError('Green tensor is undefined at the source')
     direction = displacement / radius[..., None]
-    kr = k * radius
+    kr = wave_number * radius
     identity = np.eye(3)
     radial = direction[..., :, None] * direction[..., None, :]
     transverse_coefficient = np.asarray(1 + 1j / kr - 1 / kr ** 2)
@@ -367,22 +367,24 @@ vector_fig.savefig('/tmp/qlf_vector_dipole.png', dpi=150)
 def to_3d(positions):
     return np.column_stack([positions, np.zeros(len(positions))])
 
-def solve_vector(positions, detuning, coupling=True):
+def solve_vector(positions, detuning, coupling=True, wave_number=k):
     # Fixed z-oriented transition: solve only the projected z component.
     positions = np.asarray(positions, dtype=float)
     alpha = np.broadcast_to(polarizability(detuning), len(positions))
-    incoming = np.exp(1j * k * positions[:, 0])
+    incoming = np.exp(1j * wave_number * positions[:, 0])
     matrix = np.eye(len(positions), dtype=complex)
     if coupling:
         for i in range(len(positions)):
             for j in range(len(positions)):
                 if i != j:
-                    matrix[i, j] -= alpha[i] * k ** 2 * green_tensor(positions[i] - positions[j])[2, 2]
+                    matrix[i, j] -= alpha[i] * wave_number ** 2 * green_tensor(
+                        positions[i] - positions[j], wave_number)[2, 2]
     dipoles = np.linalg.solve(matrix, alpha * incoming)
     residual = np.linalg.norm(matrix @ dipoles - alpha * incoming) / np.linalg.norm(alpha * incoming)
     return dipoles, residual, np.linalg.cond(matrix)
 
-def vector_scattered_field(points, positions, dipoles, exclusion=0.08):
+def vector_scattered_field(points, positions, dipoles, exclusion=0.08,
+                           wave_number=k):
     result = np.zeros(points.shape, dtype=complex)
     valid = np.ones(points.shape[:-1], dtype=bool)
     for atom, amplitude in zip(positions, dipoles):
@@ -391,7 +393,8 @@ def vector_scattered_field(points, positions, dipoles, exclusion=0.08):
         valid &= radius > exclusion
         safe_displacement = displacement.copy()
         safe_displacement[radius <= exclusion] = [exclusion, 0, 0]
-        result += k ** 2 * np.einsum('...ab,b->...a', green_tensor(safe_displacement),
+        result += wave_number ** 2 * np.einsum('...ab,b->...a',
+                                               green_tensor(safe_displacement, wave_number),
                                      np.array([0, 0, amplitude]))
     result[~valid] = np.nan
     return result
@@ -799,5 +802,66 @@ export_radiation_3d()
 test_intensity, xs, ys, zs = radiation_surface(dashboard_state['positions'],
                                                dashboard_state['dipoles'])
 assert np.allclose(xs**2 + ys**2 + zs**2, test_intensity**2)
+
+# Frequency offsets and time use linewidth units. The optical carrier is removed.
+pulse_count = 512
+pulse_dt = 0.08
+pulse_times = (np.arange(pulse_count) - pulse_count // 2) * pulse_dt
+pulse_input = np.exp(-0.5 * (pulse_times / 0.8) ** 2)
+pulse_frequencies = 2 * np.pi * np.fft.fftfreq(pulse_count, d=pulse_dt)
+pulse_spectrum = pulse_count * np.fft.ifft(pulse_input)
+assert np.max(abs(np.fft.fft(pulse_spectrum) / pulse_count - pulse_input)) < 1e-12
+assert np.isclose(np.sum(abs(pulse_input) ** 2),
+                  np.sum(abs(pulse_spectrum) ** 2) / pulse_count)
+
+pulse_atoms = to_3d(array_positions('line', 0.45))
+pulse_x = np.linspace(-1, 8, 100)
+pulse_points = np.column_stack([pulse_x, np.full_like(pulse_x, 0.55),
+                                np.zeros_like(pulse_x)])
+envelope_speed = 10.0  # wavelength per inverse linewidth
+incident_spectrum = np.empty((pulse_count, len(pulse_x)), dtype=complex)
+total_spectrum = np.empty_like(incident_spectrum)
+for index, frequency in enumerate(pulse_frequencies):
+    wave_number = k + frequency / envelope_speed
+    moments, _, _ = solve_vector(pulse_atoms, 0.2 + frequency,
+                                  wave_number=wave_number)
+    incident_component = np.exp(1j * wave_number * pulse_x)
+    scattered_component = vector_scattered_field(
+        pulse_points, pulse_atoms, moments, wave_number=wave_number)[:, 2]
+    incident_spectrum[index] = pulse_spectrum[index] * incident_component
+    total_spectrum[index] = pulse_spectrum[index] * (incident_component + scattered_component)
+pulse_incident_time = np.fft.fft(incident_spectrum, axis=0) / pulse_count
+pulse_total_time = np.fft.fft(total_spectrum, axis=0) / pulse_count
+target_index = np.argmin(abs(pulse_x - 5))
+assert np.isclose(np.sum(abs(pulse_incident_time[:, target_index]) ** 2),
+                  np.sum(abs(pulse_input) ** 2), rtol=1e-10)
+band_limited = total_spectrum.copy()
+band_limited[abs(pulse_frequencies) > 6] = 0
+band_limited_time = np.fft.fft(band_limited[:, target_index]) / pulse_count
+spectral_error = np.linalg.norm(band_limited_time - pulse_total_time[:, target_index])
+print(f'Pulse bandwidth truncation error: {spectral_error:.2e}')
+assert spectral_error < 2e-5
+peak_input_time = pulse_times[np.argmax(abs(pulse_incident_time[:, target_index]) ** 2)]
+assert abs(peak_input_time - pulse_x[target_index] / envelope_speed) < pulse_dt
+early_field = np.max(abs(pulse_total_time[pulse_times < -7]))
+print(f'Early pulse envelope amplitude: {early_field:.2e}')
+# Finite Fourier windows periodize the long cooperative response tail.
+assert early_field < 1e-3
+pulse_fig, pulse_axes = plt.subplots(1, 2, figsize=(11, 4))
+pulse_axes[0].imshow(abs(pulse_total_time) ** 2, extent=[pulse_x[0], pulse_x[-1],
+                          pulse_times[-1], pulse_times[0]], aspect='auto', cmap='magma',
+                          vmin=0, vmax=1.5)
+pulse_axes[0].set(xlabel=r'$x/\lambda$', ylabel=r'$t\Gamma$',
+                  ylim=(-2, 4), title='Total-field pulse envelope intensity')
+pulse_axes[1].plot(pulse_times, abs(pulse_incident_time[:, target_index]) ** 2,
+                   label='Incident')
+pulse_axes[1].plot(pulse_times, abs(pulse_total_time[:, target_index]) ** 2,
+                   label='Total')
+pulse_axes[1].set(xlim=(-2, 4), xlabel=r'$t\Gamma$',
+                  ylabel='Envelope intensity at target')
+pulse_axes[1].legend()
+pulse_fig.tight_layout()
+pulse_fig.savefig('/tmp/qlf_pulse.png', dpi=150)
+print(f'Pulse input peak at x={pulse_x[target_index]:.2f}: t={peak_input_time:.3f}')
 if plt.get_backend().lower() != 'agg':
     plt.show()
