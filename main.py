@@ -751,3 +751,53 @@ dashboard_run()
 dashboard_animation = FuncAnimation(dashboard, dashboard_tick, frames=None,
                                     interval=35, blit=False, cache_frame_data=False)
 dashboard.savefig('/tmp/qlf_dashboard.png', dpi=150)
+
+import plotly.graph_objects as go
+from pathlib import Path
+import webbrowser
+
+def radiation_surface(positions, dipoles):
+    theta, azimuth = np.meshgrid(np.linspace(0, np.pi, 61),
+                                 np.linspace(0, 2*np.pi, 121), indexing='ij')
+    directions = np.column_stack([(np.sin(theta)*np.cos(azimuth)).ravel(),
+                                  (np.sin(theta)*np.sin(azimuth)).ravel(),
+                                  np.cos(theta).ravel()])
+    amplitude = vector_far_field(positions, dipoles, directions)
+    intensity = np.sum(abs(amplitude)**2, axis=1).reshape(theta.shape)
+    normalized = intensity / intensity.max()
+    x_surface = normalized * np.sin(theta) * np.cos(azimuth)
+    y_surface = normalized * np.sin(theta) * np.sin(azimuth)
+    z_surface = normalized * np.cos(theta)
+    return normalized, x_surface, y_surface, z_surface
+
+def export_radiation_3d(path='figures/radiation3d.html'):
+    positions = dashboard_state['positions']
+    moments = dashboard_state['dipoles']
+    intensity, xs, ys, zs = radiation_surface(positions, moments)
+    fig3d = go.Figure(go.Surface(x=xs, y=ys, z=zs, surfacecolor=intensity,
+                                 colorscale='Viridis', cmin=0, cmax=1,
+                                 colorbar=dict(title='I / Imax')))
+    cameras = [dict(eye=dict(x=1.5, y=1.5, z=1.2)),
+               dict(eye=dict(x=0.1, y=0.1, z=2.2)),
+               dict(eye=dict(x=2.2, y=0.1, z=0.1))]
+    fig3d.update_layout(template='plotly_dark', title='Calculated vector radiation',
+                        scene=dict(xaxis_title='x', yaxis_title='y', zaxis_title='z',
+                                   aspectmode='cube', camera=cameras[0]),
+                        updatemenus=[dict(type='buttons', buttons=[
+                            dict(label=label, method='relayout', args=[{'scene.camera': camera}])
+                            for label, camera in zip(('Diagonal', 'Top', 'Side'), cameras)])])
+    Path(path).parent.mkdir(exist_ok=True)
+    fig3d.write_html(path, include_plotlyjs=True)
+    return path
+
+view3d_button = Button(dashboard.add_axes([0.80, 0.04, 0.14, 0.04]), 'Open 3D view')
+def open_3d(_):
+    path = export_radiation_3d()
+    webbrowser.open(Path(path).resolve().as_uri())
+view3d_button.on_clicked(open_3d)
+export_radiation_3d()
+test_intensity, xs, ys, zs = radiation_surface(dashboard_state['positions'],
+                                               dashboard_state['dipoles'])
+assert np.allclose(xs**2 + ys**2 + zs**2, test_intensity**2)
+if plt.get_backend().lower() != 'agg':
+    plt.show()
