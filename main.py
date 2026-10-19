@@ -790,7 +790,7 @@ def export_radiation_3d(path='figures/radiation3d.html'):
                             dict(label=label, method='relayout', args=[{'scene.camera': camera}])
                             for label, camera in zip(('Diagonal', 'Top', 'Side'), cameras)])])
     Path(path).parent.mkdir(exist_ok=True)
-    fig3d.write_html(path, include_plotlyjs=True)
+    fig3d.write_html(path, include_plotlyjs=True, div_id='radiation-plot')
     return path
 
 view3d_button = Button(dashboard.add_axes([0.80, 0.04, 0.14, 0.04]), 'Open 3D view')
@@ -863,5 +863,145 @@ pulse_axes[1].legend()
 pulse_fig.tight_layout()
 pulse_fig.savefig('/tmp/qlf_pulse.png', dpi=150)
 print(f'Pulse input peak at x={pulse_x[target_index]:.2f}: t={peak_input_time:.3f}')
+
+def export_showcases():
+    from matplotlib.animation import FFMpegWriter, PillowWriter
+    check_index = pulse_count // 2 + 5
+    check_time = pulse_times[check_index]
+    direct_value = np.sum(total_spectrum[:, target_index] * np.exp(
+        -1j*pulse_frequencies*(check_time+pulse_count*pulse_dt/2))) / pulse_count
+    assert abs(direct_value-pulse_total_time[check_index, target_index]) < 1e-10
+    Path('animations').mkdir(exist_ok=True)
+    Path('figures').mkdir(exist_ok=True)
+    small_x, small_y = np.meshgrid(np.linspace(-2, 2, 121),
+                                   np.linspace(-1.5, 1.5, 91))
+    small_points = np.stack([small_x, small_y, np.zeros_like(small_x)], axis=-1)
+    atom_positions = to_3d(array_positions('line', 0.45))
+    moments, _, _ = solve_vector(atom_positions, 0.2)
+    incident = np.exp(1j*k*small_x)
+    scattered = vector_scattered_field(small_points, atom_positions, moments)[..., 2]
+    harmonic_fig, harmonic_axes = plt.subplots(1, 3, figsize=(12, 3.6),
+                                                facecolor='#081322')
+    harmonic_images = []
+    for ax, complex_field, title in zip(harmonic_axes,
+                                         (incident, scattered, incident+scattered),
+                                         ('Incident', 'Scattered', 'Total')):
+        image = ax.imshow(np.real(complex_field), extent=[-2, 2, -1.5, 1.5],
+                          origin='lower', cmap='coolwarm', vmin=-2, vmax=2)
+        ax.scatter(atom_positions[:, 0], atom_positions[:, 1], s=12, c='#ffc87a')
+        ax.set_title(title + r' $\mathrm{Re}(E_z)$')
+        harmonic_images.append(image)
+    harmonic_fig.tight_layout()
+    harmonic_fig.savefig('figures/interference_preview.png', dpi=170)
+    def harmonic_frame(frame):
+        phase = np.exp(-1j*2*np.pi*frame/30)
+        for image, complex_field in zip(harmonic_images,
+                                         (incident, scattered, incident+scattered)):
+            image.set_data(np.real(complex_field*phase))
+        return harmonic_images
+    harmonic_movie = FuncAnimation(harmonic_fig, harmonic_frame, frames=30, blit=False)
+    harmonic_movie.save('animations/interference.mp4', writer=FFMpegWriter(fps=15), dpi=150)
+    harmonic_movie.save('animations/interference.gif', writer=PillowWriter(fps=15), dpi=90)
+    plt.close(harmonic_fig)
+
+    gradients = np.linspace(-0.8, 0.8, 29)
+    steering_fields = []
+    steering_patterns = []
+    for gradient in gradients:
+        trial, _, _ = solve_vector(steer_atoms, 0.2 + gradient*steer_atoms[:, 1])
+        steering_fields.append(np.real(incident + vector_scattered_field(
+            small_points, steer_atoms, trial)[..., 2]))
+        steering_patterns.append(np.sum(abs(vector_far_field(
+            steer_atoms, trial, forward_directions))**2, axis=1))
+    steer_fig, (steer_field_ax, steer_far_ax) = plt.subplots(1, 2, figsize=(9, 3.7))
+    steer_image = steer_field_ax.imshow(steering_fields[0], extent=[-2, 2, -1.5, 1.5],
+                                        origin='lower', cmap='coolwarm', vmin=-2, vmax=2)
+    steer_field_ax.scatter(steer_atoms[:, 0], steer_atoms[:, 1], c='#ffc87a', s=12)
+    steer_line, = steer_far_ax.plot(np.rad2deg(steering_angles), steering_patterns[0],
+                                    color='#5eead4')
+    steer_far_ax.set(xlim=(-90, 90), ylim=(0, 1.05*max(map(np.max, steering_patterns))),
+                      xlabel='Forward angle (degrees)', ylabel='Intensity')
+    steer_fig.tight_layout()
+    steer_fig.savefig('figures/steering_preview.png', dpi=170)
+    def steering_frame(frame):
+        steer_image.set_data(steering_fields[frame])
+        steer_line.set_ydata(steering_patterns[frame])
+        steer_field_ax.set_title(rf'Computed $\Delta$ gradient: {gradients[frame]:+.2f}')
+        return (steer_image, steer_line)
+    steering_movie = FuncAnimation(steer_fig, steering_frame,
+                                   frames=len(gradients), blit=False)
+    steering_movie.save('animations/steering.mp4', writer=FFMpegWriter(fps=12), dpi=150)
+    plt.close(steer_fig)
+
+    focus_x, focus_y = np.meshgrid(np.linspace(-1.5, 2.5, 121),
+                                   np.linspace(-1.4, 1.4, 91))
+    focus_points = np.stack([focus_x, focus_y, np.zeros_like(focus_x)], axis=-1)
+    focus_fields = []
+    for detunings_now in (baseline_detunings, optimization.x):
+        trial = focus_dipoles(detunings_now)
+        profile = np.exp(1j*k*focus_x) + vector_scattered_field(
+            focus_points, focus_atoms, trial)[..., 2]
+        focus_fields.append(abs(profile)**2)
+    focus_movie_fig, focus_movie_ax = plt.subplots(figsize=(6, 4))
+    focus_image = focus_movie_ax.imshow(focus_fields[0], extent=[-1.5, 2.5, -1.4, 1.4],
+                                        origin='lower', cmap='magma', vmin=0, vmax=2.0)
+    focus_movie_ax.scatter(focus_atoms[:, 0], focus_atoms[:, 1], c='#5eead4', s=12)
+    focus_movie_ax.plot(focus_target[0], focus_target[1], '+', c='white', markersize=10)
+    focus_movie_fig.tight_layout()
+    focus_movie_fig.savefig('figures/focusing_preview.png', dpi=170)
+    def focus_frame(frame):
+        selected = 0 if frame < 12 else 1
+        focus_image.set_data(focus_fields[selected])
+        focus_movie_ax.set_title(('Uniform' if selected == 0 else 'Optimized')
+                                  + f' detunings; target gain {optimized_focus/baseline_focus:.3f}x')
+        return (focus_image,)
+    focus_movie = FuncAnimation(focus_movie_fig, focus_frame, frames=24, blit=False)
+    focus_movie.save('animations/focusing.mp4', writer=FFMpegWriter(fps=12), dpi=150)
+    plt.close(focus_movie_fig)
+
+    pulse_grid_x, pulse_grid_y = np.meshgrid(np.linspace(-1.5, 6, 101),
+                                             np.linspace(-1.3, 1.3, 71))
+    pulse_grid = np.stack([pulse_grid_x, pulse_grid_y,
+                           np.zeros_like(pulse_grid_x)], axis=-1)
+    active = np.flatnonzero(abs(pulse_frequencies) <= 6)
+    spectral_grids = []
+    for index in active:
+        frequency = pulse_frequencies[index]
+        wave_number = k + frequency/envelope_speed
+        trial, _, _ = solve_vector(pulse_atoms, 0.2+frequency,
+                                    wave_number=wave_number)
+        profile = (np.exp(1j*wave_number*pulse_grid_x)
+                   + vector_scattered_field(pulse_grid, pulse_atoms, trial,
+                                            wave_number=wave_number)[..., 2])
+        spectral_grids.append(pulse_spectrum[index]*profile)
+    spectral_grids = np.asarray(spectral_grids)
+    pulse_movie_times = np.linspace(-1.5, 2.5, 29)
+    pulse_frames = []
+    for instant in pulse_movie_times:
+        weights = np.exp(-1j*pulse_frequencies[active]
+                         *(instant + pulse_count*pulse_dt/2))/pulse_count
+        envelope = np.einsum('f,fxy->xy', weights, spectral_grids)
+        pulse_frames.append(abs(envelope)**2)
+    pulse_movie_fig, pulse_movie_ax = plt.subplots(figsize=(7, 3.8))
+    pulse_image = pulse_movie_ax.imshow(pulse_frames[0],
+                                        extent=[-1.5, 6, -1.3, 1.3], origin='lower',
+                                        cmap='magma', vmin=0, vmax=1.5)
+    pulse_movie_ax.scatter(pulse_atoms[:, 0], pulse_atoms[:, 1],
+                           c='#5eead4', s=12)
+    pulse_image.set_data(pulse_frames[np.argmin(abs(pulse_movie_times-0.5))])
+    pulse_movie_ax.set_title('Finite-bandwidth pulse, total intensity')
+    pulse_movie_fig.tight_layout()
+    pulse_movie_fig.savefig('figures/pulse_preview.png', dpi=170)
+    def pulse_frame(frame):
+        pulse_image.set_data(pulse_frames[frame])
+        pulse_movie_ax.set_title(rf'Calculated pulse envelope, $t\Gamma={pulse_movie_times[frame]:.2f}$')
+        return (pulse_image,)
+    pulse_movie = FuncAnimation(pulse_movie_fig, pulse_frame,
+                                frames=len(pulse_frames), blit=False)
+    pulse_movie.save('animations/pulse.mp4', writer=FFMpegWriter(fps=12), dpi=150)
+    plt.close(pulse_movie_fig)
+
+if os.environ.get('QLF_EXPORT') == '1':
+    export_showcases()
 if plt.get_backend().lower() != 'agg':
     plt.show()
