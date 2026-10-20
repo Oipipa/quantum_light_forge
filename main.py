@@ -2,7 +2,15 @@ import matplotlib.pyplot as plt
 import numpy as np
 import os
 from matplotlib.animation import FuncAnimation
+from pathlib import Path
+from atoms import array_positions, dashboard_positions, k, polarizability, to_3d
+from scattering import (scalar_field, scalar_far_field, scalar_coupling_matrix,
+                        solve_scalar, green_tensor, dipole_field, solve_vector,
+                        vector_scattered_field, vector_far_field)
+from visualization import plot_dipoles, radiation_surface
+from pulse import spectrum_from_time, time_from_spectrum, synthesize_at_time
 
+Path('figures').mkdir(exist_ok=True)
 wavelength = 1.0
 k = 2 * np.pi / wavelength
 x = np.linspace(-2, 2, 401)
@@ -109,13 +117,6 @@ showcase_animation = FuncAnimation(showcase_fig, animate_total, frames=48,
 if os.environ.get('QLF_EXPORT') == '1':
     showcase_animation.save('/tmp/qlf_showcase.gif', writer='pillow', fps=28, dpi=140)
 
-def scalar_field(positions, amplitudes, grid_x=X, grid_y=Y):
-    result = np.zeros_like(grid_x, dtype=complex)
-    for (sx, sy), amplitude in zip(positions, amplitudes):
-        distance = np.hypot(grid_x - sx, grid_y - sy)
-        valid = distance > 0.08
-        result[valid] += amplitude * np.exp(1j * k * distance[valid]) / (4 * np.pi * distance[valid])
-    return result
 
 line_fig, line_axes = plt.subplots(1, 2, figsize=(10, 4))
 for ax, spacing in zip(line_axes, (0.4, 0.8)):
@@ -128,21 +129,6 @@ for ax, spacing in zip(line_axes, (0.4, 0.8)):
 line_fig.tight_layout()
 line_fig.savefig('/tmp/qlf_line_array.png', dpi=140)
 
-def array_positions(kind, spacing=0.5):
-    if kind == 'line':
-        return np.column_stack([np.zeros(5), (np.arange(5) - 2) * spacing])
-    if kind == 'square':
-        xx, yy = np.meshgrid((np.arange(3) - 1) * spacing,
-                             (np.arange(3) - 1) * spacing)
-        return np.column_stack([xx.ravel(), yy.ravel()])
-    if kind == 'circle':
-        angle = np.arange(8) * 2 * np.pi / 8
-        return np.column_stack([spacing * np.cos(angle), spacing * np.sin(angle)])
-    if kind == 'rows':
-        xx, yy = np.meshgrid([-spacing / 2, spacing / 2],
-                             (np.arange(5) - 2) * spacing)
-        return np.column_stack([xx.ravel(), yy.ravel()])
-    raise ValueError(kind)
 
 geometry_fig, geometry_axes = plt.subplots(2, 2, figsize=(9, 7))
 for ax, kind in zip(geometry_axes.flat, ('line', 'square', 'circle', 'rows')):
@@ -155,10 +141,6 @@ for ax, kind in zip(geometry_axes.flat, ('line', 'square', 'circle', 'rows')):
 geometry_fig.tight_layout()
 geometry_fig.savefig('/tmp/qlf_geometries.png', dpi=140)
 
-def scalar_far_field(positions, amplitudes, angles):
-    directions = np.column_stack([np.cos(angles), np.sin(angles)])
-    phase = np.exp(-1j * k * directions @ positions.T)
-    return phase @ np.asarray(amplitudes)
 
 angles = np.linspace(-np.pi, np.pi, 721)
 far_fig = plt.figure(figsize=(7, 6))
@@ -203,9 +185,6 @@ moving_animation = FuncAnimation(moving_fig, move_beam, frames=40, blit=True)
 if os.environ.get('QLF_EXPORT') == '1':
     moving_animation.save('/tmp/qlf_prescribed_steering.gif', writer='pillow', fps=20)
 
-def polarizability(detuning, gamma_rad=1.0, gamma_total=1.0):
-    # epsilon_0 = 1, length in wavelengths, rates in radiative linewidths.
-    return -(6 * np.pi / k ** 3) * (gamma_rad / 2) / (detuning + 1j * gamma_total / 2)
 
 detunings = np.linspace(-3, 3, 601)
 alpha_values = polarizability(detunings)
@@ -240,20 +219,7 @@ independent_axes[1].set(xlabel='Observation angle (degrees)',
 independent_fig.tight_layout()
 independent_fig.savefig('/tmp/qlf_independent_atoms.png', dpi=150)
 
-def scalar_coupling_matrix(positions):
-    displacement = positions[:, None, :] - positions[None, :, :]
-    distance = np.linalg.norm(displacement, axis=-1)
-    matrix = np.zeros(distance.shape, dtype=complex)
-    mask = ~np.eye(len(positions), dtype=bool)
-    matrix[mask] = k ** 2 * np.exp(1j * k * distance[mask]) / (4 * np.pi * distance[mask])
-    return matrix
 
-def solve_scalar(positions, detuning):
-    alpha = np.broadcast_to(polarizability(detuning), len(positions))
-    incident = np.exp(1j * k * positions[:, 0])
-    matrix = np.eye(len(positions)) - alpha[:, None] * scalar_coupling_matrix(positions)
-    dipoles = np.linalg.solve(matrix, alpha * incident)
-    return dipoles, matrix
 
 cooperative_dipoles, scalar_matrix = solve_scalar(atomic_line, 0.4)
 assert np.linalg.norm(scalar_matrix @ cooperative_dipoles
@@ -288,7 +254,7 @@ spectrum_ax.plot(spectrum_detunings, cooperative_spectrum, label='Cooperative')
 spectrum_ax.set(xlabel=r'$\Delta/\Gamma$', ylabel='Angle-integrated scalar response')
 spectrum_ax.legend()
 spectrum_fig.tight_layout()
-spectrum_fig.savefig('/tmp/qlf_scalar_spectrum.png', dpi=150)
+spectrum_fig.savefig('figures/scalar_spectrum.png', dpi=150)
 print('Scalar spectral peaks:',
       spectrum_detunings[np.argmax(independent_spectrum)],
       spectrum_detunings[np.argmax(cooperative_spectrum)])
@@ -329,23 +295,7 @@ assert np.array_equal(single_matrix, np.eye(1))
 assert np.allclose(np.linalg.solve(np.eye(len(check_rhs)), check_rhs), check_rhs)
 print(f'Scalar solver residual={relative_residual:.2e}, condition={condition_number:.2f}')
 
-def green_tensor(displacement, wave_number=k):
-    displacement = np.asarray(displacement, dtype=float)
-    radius = np.linalg.norm(displacement, axis=-1)
-    if np.any(radius == 0):
-        raise ValueError('Green tensor is undefined at the source')
-    direction = displacement / radius[..., None]
-    kr = wave_number * radius
-    identity = np.eye(3)
-    radial = direction[..., :, None] * direction[..., None, :]
-    transverse_coefficient = np.asarray(1 + 1j / kr - 1 / kr ** 2)
-    radial_coefficient = np.asarray(-1 - 3j / kr + 3 / kr ** 2)
-    return np.asarray(np.exp(1j * kr) / (4 * np.pi * radius))[..., None, None] * (
-        transverse_coefficient[..., None, None] * identity
-        + radial_coefficient[..., None, None] * radial)
 
-def dipole_field(displacement, dipole):
-    return k ** 2 * np.einsum('...ab,b->...a', green_tensor(displacement), dipole)
 
 polar_angles = np.linspace(0, np.pi, 361)
 directions_3d = np.column_stack([np.sin(polar_angles),
@@ -364,46 +314,9 @@ vector_ax.legend()
 vector_fig.tight_layout()
 vector_fig.savefig('/tmp/qlf_vector_dipole.png', dpi=150)
 
-def to_3d(positions):
-    return np.column_stack([positions, np.zeros(len(positions))])
 
-def solve_vector(positions, detuning, coupling=True, wave_number=k):
-    # Fixed z-oriented transition: solve only the projected z component.
-    positions = np.asarray(positions, dtype=float)
-    alpha = np.broadcast_to(polarizability(detuning), len(positions))
-    incoming = np.exp(1j * wave_number * positions[:, 0])
-    matrix = np.eye(len(positions), dtype=complex)
-    if coupling:
-        for i in range(len(positions)):
-            for j in range(len(positions)):
-                if i != j:
-                    matrix[i, j] -= alpha[i] * wave_number ** 2 * green_tensor(
-                        positions[i] - positions[j], wave_number)[2, 2]
-    dipoles = np.linalg.solve(matrix, alpha * incoming)
-    residual = np.linalg.norm(matrix @ dipoles - alpha * incoming) / np.linalg.norm(alpha * incoming)
-    return dipoles, residual, np.linalg.cond(matrix)
 
-def vector_scattered_field(points, positions, dipoles, exclusion=0.08,
-                           wave_number=k):
-    result = np.zeros(points.shape, dtype=complex)
-    valid = np.ones(points.shape[:-1], dtype=bool)
-    for atom, amplitude in zip(positions, dipoles):
-        displacement = points - atom
-        radius = np.linalg.norm(displacement, axis=-1)
-        valid &= radius > exclusion
-        safe_displacement = displacement.copy()
-        safe_displacement[radius <= exclusion] = [exclusion, 0, 0]
-        result += wave_number ** 2 * np.einsum('...ab,b->...a',
-                                               green_tensor(safe_displacement, wave_number),
-                                     np.array([0, 0, amplitude]))
-    result[~valid] = np.nan
-    return result
 
-def vector_far_field(positions, dipoles, directions):
-    moments = np.column_stack([np.zeros(len(dipoles)), np.zeros(len(dipoles)), dipoles])
-    phases = np.exp(-1j * k * directions @ positions.T)
-    summed = phases @ moments
-    return summed - directions * np.sum(directions * summed, axis=-1)[:, None]
 
 vector_atoms = to_3d(array_positions('square', 0.55))
 vector_dipoles, vector_residual, vector_condition = solve_vector(vector_atoms, 0.2)
@@ -424,15 +337,9 @@ vector_gate_axes[0].set_title(r'$\mathrm{Re}(E_z)$, coupled vector dipoles')
 vector_gate_axes[1].plot(np.rad2deg(steering_angles), vector_angular)
 vector_gate_axes[1].set(xlabel='Forward angle (degrees)', ylabel='Transverse far-field intensity')
 vector_gate_fig.tight_layout()
-vector_gate_fig.savefig('/tmp/qlf_vector_coupled.png', dpi=150)
+vector_gate_fig.savefig('figures/vector_coupled.png', dpi=150)
 print(f'Vector solver residual={vector_residual:.2e}, condition={vector_condition:.2f}')
 
-def plot_dipoles(ax, positions, dipoles, mode='phase'):
-    values = np.angle(dipoles) if mode == 'phase' else abs(dipoles)
-    colors = 'twilight' if mode == 'phase' else 'viridis'
-    limits = (-np.pi, np.pi) if mode == 'phase' else (0, max(values) * 1.05)
-    return ax.scatter(positions[:, 0], positions[:, 1], c=values, s=170,
-                      cmap=colors, vmin=limits[0], vmax=limits[1], edgecolors='white')
 
 phase_fig, phase_axes = plt.subplots(2, 2, figsize=(8, 7))
 for row, detuning in enumerate((-0.6, 0.6)):
@@ -444,6 +351,7 @@ for row, detuning in enumerate((-0.6, 0.6)):
         phase_fig.colorbar(image, ax=phase_axes[row, col], shrink=0.75)
 phase_fig.tight_layout()
 phase_fig.savefig('/tmp/qlf_dipole_maps.png', dpi=150)
+plt.close('all')
 
 steer_atoms = to_3d(np.column_stack([np.zeros(9), (np.arange(9) - 4) * 0.35]))
 gradient_fig, gradient_ax = plt.subplots(figsize=(7, 4))
@@ -461,7 +369,7 @@ for gradient in (-0.7, 0.0, 0.7):
 gradient_ax.set(xlabel='Forward angle (degrees)', ylabel='Vector far-field intensity')
 gradient_ax.legend()
 gradient_fig.tight_layout()
-gradient_fig.savefig('/tmp/qlf_detuning_steering.png', dpi=150)
+gradient_fig.savefig('figures/detuning_steering.png', dpi=150)
 print('Detuning-gradient peak angles:', gradient_peaks)
 
 from scipy.optimize import differential_evolution
@@ -509,7 +417,7 @@ focus_ax.axvline(focus_target[1], color='white', linestyle=':')
 focus_ax.set(xlabel=r'$y/\lambda$ at $x=1.6\lambda$', ylabel=r'$|E_z|^2$')
 focus_ax.legend()
 focus_fig.tight_layout()
-focus_fig.savefig('/tmp/qlf_focus.png', dpi=150)
+focus_fig.savefig('figures/focus_profile.png', dpi=150)
 print(f'Focus intensity: {baseline_focus:.4f} -> {optimized_focus:.4f}, '
       f'factor {optimized_focus/baseline_focus:.3f}')
 
@@ -578,7 +486,7 @@ defect_axes[1].set(xlabel=r'Extra $\Delta/\Gamma$', ylabel='Integrated response'
 for ax in defect_axes:
     ax.legend(fontsize=8)
 defect_fig.tight_layout()
-defect_fig.savefig('/tmp/qlf_defects.png', dpi=150)
+defect_fig.savefig('figures/defects.png', dpi=150)
 
 ancilla_location = np.array([0.0, 0.35, 0.8])
 distance_to_ancilla = np.linalg.norm(steer_atoms - ancilla_location, axis=1)
@@ -596,7 +504,7 @@ conditional_axes[1].set(xlabel=r'Atom $y/\lambda$', ylabel='Dipole amplitude')
 for ax in conditional_axes:
     ax.legend()
 conditional_fig.tight_layout()
-conditional_fig.savefig('/tmp/qlf_conditional.png', dpi=150)
+conditional_fig.savefig('figures/conditional_response.png', dpi=150)
 print('Conditional detuning shifts:', np.round(conditional_shift, 3))
 
 from matplotlib.widgets import Button, CheckButtons, RadioButtons
@@ -611,6 +519,8 @@ spectrum_ax = dashboard.add_subplot(layout[1, 2:])
 radiation_ax = dashboard.add_subplot(layout[2, 2:])
 field_image = field_ax.imshow(np.zeros_like(view_x), extent=[-2, 2, -1.5, 1.5],
                               origin='lower', cmap='coolwarm', vmin=-2, vmax=2)
+field_markers = field_ax.scatter([], [], c='#5eead4', s=16, edgecolors='white',
+                                 linewidths=0.3, zorder=5)
 atom_image = atom_ax.scatter([], [], c=[], cmap='twilight', vmin=-np.pi,
                               vmax=np.pi, s=75)
 spectrum_line, = spectrum_ax.plot([], [], color='#c18cff')
@@ -620,23 +530,6 @@ dashboard_cache = {}
 dashboard_state = {'phase': 0.0, 'playing': True, 'fields': None, 'positions': None,
                    'dipoles': None, 'spectrum': None, 'radiation': None}
 
-def dashboard_positions(kind, count, spacing):
-    if kind == 'Line':
-        return to_3d(np.column_stack([np.zeros(count),
-                                      (np.arange(count) - (count - 1) / 2) * spacing]))
-    if kind == 'Square':
-        side = max(2, int(np.ceil(np.sqrt(count))))
-        xx, yy = np.meshgrid((np.arange(side) - (side - 1) / 2) * spacing,
-                             (np.arange(side) - (side - 1) / 2) * spacing)
-        return to_3d(np.column_stack([xx.ravel(), yy.ravel()])[:count])
-    if kind == 'Circle':
-        azimuth = np.arange(count) * 2 * np.pi / count
-        return to_3d(np.column_stack([spacing * np.cos(azimuth),
-                                      spacing * np.sin(azimuth)]))
-    xx, yy = np.meshgrid([-spacing / 2, spacing / 2],
-                         (np.arange(int(np.ceil(count / 2)))
-                          - (int(np.ceil(count / 2)) - 1) / 2) * spacing)
-    return to_3d(np.column_stack([xx.ravel(), yy.ravel()])[:count])
 
 def dashboard_calculate(kind, count, spacing, detuning, gradient, defect):
     key = (kind, count, spacing, detuning, gradient, defect)
@@ -672,6 +565,9 @@ gradient_control = Slider(dashboard.add_axes([0.32, 0.055, 0.17, 0.025]),
                           'Gradient', -1, 1, valinit=0)
 speed_slider = Slider(dashboard.add_axes([0.55, 0.105, 0.16, 0.025]),
                       'Speed', 0.2, 3, valinit=1)
+for control in (space_slider, number_slider, detuning_slider,
+                gradient_control, speed_slider):
+    control.valtext.set_visible(False)
 geometry_control = RadioButtons(dashboard.add_axes([0.79, 0.72, 0.19, 0.21]),
                                 ('Line', 'Square', 'Circle', 'Rows'))
 field_control = RadioButtons(dashboard.add_axes([0.79, 0.49, 0.19, 0.19]),
@@ -680,9 +576,15 @@ mode_control = RadioButtons(dashboard.add_axes([0.79, 0.29, 0.19, 0.17]),
                             ('Real', 'Intensity', 'Phase'))
 defect_control = CheckButtons(dashboard.add_axes([0.79, 0.22, 0.19, 0.05]),
                               ['Missing atom'], [False])
-run_button = Button(dashboard.add_axes([0.53, 0.04, 0.08, 0.04]), 'Update')
-play_button = Button(dashboard.add_axes([0.62, 0.04, 0.08, 0.04]), 'Pause')
-restart_button = Button(dashboard.add_axes([0.71, 0.04, 0.08, 0.04]), 'Restart')
+dashboard.text(0.79, 0.94, 'GEOMETRY', color='#5eead4', fontsize=10)
+dashboard.text(0.79, 0.69, 'FIELD', color='#5eead4', fontsize=10)
+dashboard.text(0.79, 0.47, 'DISPLAY', color='#5eead4', fontsize=10)
+run_button = Button(dashboard.add_axes([0.53, 0.04, 0.08, 0.04]), 'Update',
+                    color='#17324d', hovercolor='#285777')
+play_button = Button(dashboard.add_axes([0.62, 0.04, 0.08, 0.04]), 'Pause',
+                     color='#17324d', hovercolor='#285777')
+restart_button = Button(dashboard.add_axes([0.71, 0.04, 0.08, 0.04]), 'Restart',
+                        color='#17324d', hovercolor='#285777')
 
 def dashboard_draw():
     if dashboard_state['fields'] is None:
@@ -716,10 +618,11 @@ def dashboard_run(_=None):
     dashboard_state.update(positions=positions, dipoles=moments,
                            fields=(incident_z, scattered_z), spectrum=spec,
                            radiation=angular)
+    field_markers.set_offsets(positions[:, :2])
     atom_image.set_offsets(positions[:, :2])
     atom_image.set_array(np.angle(moments))
     atom_image.set_sizes(50 + 170 * abs(moments) / max(abs(moments)))
-    atom_ax.set(xlim=(-1.8, 1.8), ylim=(-1.4, 1.4),
+    atom_ax.set(xlim=(-1.8, 1.8), ylim=(-2.0, 2.0),
                 title='Atomic dipole phase and amplitude')
     spectrum_line.set_data(np.linspace(-2, 2, len(spec)), spec)
     spectrum_ax.relim(); spectrum_ax.autoscale_view()
@@ -751,27 +654,13 @@ restart_button.on_clicked(dashboard_restart)
 field_control.on_clicked(lambda _: dashboard_draw())
 mode_control.on_clicked(lambda _: dashboard_draw())
 dashboard_run()
-dashboard_animation = FuncAnimation(dashboard, dashboard_tick, frames=None,
-                                    interval=35, blit=False, cache_frame_data=False)
-dashboard.savefig('/tmp/qlf_dashboard.png', dpi=150)
+if plt.get_backend().lower() != 'agg':
+    dashboard_animation = FuncAnimation(dashboard, dashboard_tick, frames=None,
+                                        interval=35, blit=False, cache_frame_data=False)
 
 import plotly.graph_objects as go
-from pathlib import Path
 import webbrowser
 
-def radiation_surface(positions, dipoles):
-    theta, azimuth = np.meshgrid(np.linspace(0, np.pi, 61),
-                                 np.linspace(0, 2*np.pi, 121), indexing='ij')
-    directions = np.column_stack([(np.sin(theta)*np.cos(azimuth)).ravel(),
-                                  (np.sin(theta)*np.sin(azimuth)).ravel(),
-                                  np.cos(theta).ravel()])
-    amplitude = vector_far_field(positions, dipoles, directions)
-    intensity = np.sum(abs(amplitude)**2, axis=1).reshape(theta.shape)
-    normalized = intensity / intensity.max()
-    x_surface = normalized * np.sin(theta) * np.cos(azimuth)
-    y_surface = normalized * np.sin(theta) * np.sin(azimuth)
-    z_surface = normalized * np.cos(theta)
-    return normalized, x_surface, y_surface, z_surface
 
 def export_radiation_3d(path='figures/radiation3d.html'):
     positions = dashboard_state['positions']
@@ -793,11 +682,13 @@ def export_radiation_3d(path='figures/radiation3d.html'):
     fig3d.write_html(path, include_plotlyjs=True, div_id='radiation-plot')
     return path
 
-view3d_button = Button(dashboard.add_axes([0.80, 0.04, 0.14, 0.04]), 'Open 3D view')
+view3d_button = Button(dashboard.add_axes([0.80, 0.04, 0.14, 0.04]), 'Open 3D view',
+                       color='#17324d', hovercolor='#285777')
 def open_3d(_):
     path = export_radiation_3d()
     webbrowser.open(Path(path).resolve().as_uri())
 view3d_button.on_clicked(open_3d)
+dashboard.savefig('figures/dashboard_preview.png', dpi=150)
 export_radiation_3d()
 test_intensity, xs, ys, zs = radiation_surface(dashboard_state['positions'],
                                                dashboard_state['dipoles'])
@@ -809,8 +700,8 @@ pulse_dt = 0.08
 pulse_times = (np.arange(pulse_count) - pulse_count // 2) * pulse_dt
 pulse_input = np.exp(-0.5 * (pulse_times / 0.8) ** 2)
 pulse_frequencies = 2 * np.pi * np.fft.fftfreq(pulse_count, d=pulse_dt)
-pulse_spectrum = pulse_count * np.fft.ifft(pulse_input)
-assert np.max(abs(np.fft.fft(pulse_spectrum) / pulse_count - pulse_input)) < 1e-12
+pulse_spectrum = spectrum_from_time(pulse_input)
+assert np.max(abs(time_from_spectrum(pulse_spectrum) - pulse_input)) < 1e-12
 assert np.isclose(np.sum(abs(pulse_input) ** 2),
                   np.sum(abs(pulse_spectrum) ** 2) / pulse_count)
 
@@ -830,14 +721,14 @@ for index, frequency in enumerate(pulse_frequencies):
         pulse_points, pulse_atoms, moments, wave_number=wave_number)[:, 2]
     incident_spectrum[index] = pulse_spectrum[index] * incident_component
     total_spectrum[index] = pulse_spectrum[index] * (incident_component + scattered_component)
-pulse_incident_time = np.fft.fft(incident_spectrum, axis=0) / pulse_count
-pulse_total_time = np.fft.fft(total_spectrum, axis=0) / pulse_count
+pulse_incident_time = time_from_spectrum(incident_spectrum)
+pulse_total_time = time_from_spectrum(total_spectrum)
 target_index = np.argmin(abs(pulse_x - 5))
 assert np.isclose(np.sum(abs(pulse_incident_time[:, target_index]) ** 2),
                   np.sum(abs(pulse_input) ** 2), rtol=1e-10)
 band_limited = total_spectrum.copy()
 band_limited[abs(pulse_frequencies) > 6] = 0
-band_limited_time = np.fft.fft(band_limited[:, target_index]) / pulse_count
+band_limited_time = time_from_spectrum(band_limited[:, target_index])
 spectral_error = np.linalg.norm(band_limited_time - pulse_total_time[:, target_index])
 print(f'Pulse bandwidth truncation error: {spectral_error:.2e}')
 assert spectral_error < 2e-5
@@ -861,15 +752,16 @@ pulse_axes[1].set(xlim=(-2, 4), xlabel=r'$t\Gamma$',
                   ylabel='Envelope intensity at target')
 pulse_axes[1].legend()
 pulse_fig.tight_layout()
-pulse_fig.savefig('/tmp/qlf_pulse.png', dpi=150)
+pulse_fig.savefig('figures/pulse_envelope.png', dpi=150)
 print(f'Pulse input peak at x={pulse_x[target_index]:.2f}: t={peak_input_time:.3f}')
 
 def export_showcases():
     from matplotlib.animation import FFMpegWriter, PillowWriter
     check_index = pulse_count // 2 + 5
     check_time = pulse_times[check_index]
-    direct_value = np.sum(total_spectrum[:, target_index] * np.exp(
-        -1j*pulse_frequencies*(check_time+pulse_count*pulse_dt/2))) / pulse_count
+    direct_value = synthesize_at_time(total_spectrum[:, target_index],
+                                      pulse_frequencies, check_time,
+                                      pulse_times[0])
     assert abs(direct_value-pulse_total_time[check_index, target_index]) < 1e-10
     Path('animations').mkdir(exist_ok=True)
     Path('figures').mkdir(exist_ok=True)
@@ -979,7 +871,7 @@ def export_showcases():
     pulse_frames = []
     for instant in pulse_movie_times:
         weights = np.exp(-1j*pulse_frequencies[active]
-                         *(instant + pulse_count*pulse_dt/2))/pulse_count
+                         *(instant - pulse_times[0]))/pulse_count
         envelope = np.einsum('f,fxy->xy', weights, spectral_grids)
         pulse_frames.append(abs(envelope)**2)
     pulse_movie_fig, pulse_movie_ax = plt.subplots(figsize=(7, 3.8))
@@ -1003,5 +895,26 @@ def export_showcases():
 
 if os.environ.get('QLF_EXPORT') == '1':
     export_showcases()
+Path('results').mkdir(exist_ok=True)
+np.savetxt('results/scalar_spectrum.csv',
+           np.column_stack([spectrum_detunings, independent_spectrum,
+                            cooperative_spectrum]), delimiter=',',
+           header='detuning_gamma,independent,cooperative', comments='')
+np.savetxt('results/detuning_steering.csv',
+           np.array([[gradient, angle] for gradient, angle in gradient_peaks.items()]),
+           delimiter=',', header='gradient_gamma_per_lambda,peak_angle_deg', comments='')
+np.savetxt('results/focus.csv',
+           np.column_stack([np.arange(len(focus_atoms)), baseline_detunings,
+                            optimization.x]), delimiter=',',
+           header='atom,uniform_detuning_gamma,optimized_detuning_gamma', comments='')
+np.savetxt('results/focus_summary.csv',
+           np.array([[baseline_focus, optimized_focus,
+                      optimized_focus / baseline_focus]]), delimiter=',',
+           header='baseline_intensity,optimized_intensity,gain', comments='')
+np.savetxt('results/pulse_target.csv',
+           np.column_stack([pulse_times,
+                            abs(pulse_incident_time[:, target_index])**2,
+                            abs(pulse_total_time[:, target_index])**2]),
+           delimiter=',', header='time_inverse_gamma,incident,total', comments='')
 if plt.get_backend().lower() != 'agg':
     plt.show()
