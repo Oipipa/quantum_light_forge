@@ -8,11 +8,11 @@ The early experiments use scalar outgoing waves, $G_0(r)=e^{ikr}/(4\pi r)$, on a
 
 For each atom, the fixed-polarization response solves $p_i=\alpha_i[E_{\mathrm{inc},z}(\mathbf r_i)+k^2\sum_{j\ne i}G_{zz}(\mathbf r_i-\mathbf r_j)p_j]$. The ideal weak-driving polarizability is $\alpha(\Delta)=-(6\pi/k^3)(\Gamma_{\rm rad}/2)/(\Delta+i\Gamma_{\rm tot}/2)$. Self-interaction is excluded. Radiative damping is already in $\alpha$ and is not added again. With nonradiative loss, $\Gamma_{\rm tot}>\Gamma_{\rm rad}$. The tests check the isolated-atom optical-theorem limit, matrix residuals, Green-tensor reciprocity, far-field consistency, and pulse reconstruction.
 
-The scalar five-atom array at spacing $0.55\lambda$ has a response peak at $\Delta=0.275\Gamma$; independent atoms peak at zero. This is a result of that intermediate scalar model, not a universal shift. The vector calculation uses a different projected Green tensor.
+The scalar five-atom array at spacing $0.55\lambda$ has a response peak at $\Delta=0.275\Gamma$; independent atoms peak at zero. The vector calculation uses a different projected Green tensor.
 
 ![Scalar independent and cooperative spectra](figures/scalar_spectrum.png)
 
-A detuning gradient of $-0.7$, $0$, and $+0.7\,\Gamma/\lambda$ moves the calculated forward far-field maximum to $-7.5^\circ$, $0^\circ$, and $+7.5^\circ$. These phases come from self-consistent atomic dipoles. They are not prescribed emitter phases.
+A detuning gradient of $-0.7$, $0$, and $+0.7\,\Gamma/\lambda$ moves the calculated forward far-field maximum to $-7.5^\circ$, $0^\circ$, and $+7.5^\circ$. These phases come from self-consistent atomic dipoles. 
 
 ![Beam steering from local detunings](figures/detuning_steering.png)
 
@@ -20,7 +20,7 @@ At a target $1.6\lambda$ beyond a five-atom line, bounded optimization of local 
 
 ![Calculated focusing profile](figures/focus_profile.png)
 
-For a separate nine-atom line, removing one atom shifts the strongest forward lobe from $0^\circ$ to $-1.5^\circ$ and changes intensity at the chosen probe from 0.839 to 0.935. A seeded position perturbation lowers that probe intensity to 0.789. A local detuning defect gives 0.778. Defects need not always reduce intensity at one point; they alter interference. An optional spatial detuning shift from a nearby ancilla changes the scattering pattern, but it is only an effective conditional response.
+For a separate nine-atom line, removing one atom shifts the strongest forward lobe from $0^\circ$ to $-1.5^\circ$ and changes intensity at the chosen probe from 0.839 to 0.935. A seeded position perturbation lowers that probe intensity to 0.789. A local detuning defect gives 0.778. 
 
 ![Array defect comparison](figures/defects.png)
 
@@ -32,4 +32,4 @@ Run `python -m pip install -r requirements.txt`, then `python main.py` for the M
 
 ![Dashboard preview](figures/dashboard_preview.png)
 
-The model is linear and weakly excited. It does not calculate saturation, photon antibunching, many-photon correlations, nonlinear gates, or full Rydberg-EIT dynamics. The short [report](report.md) gives the numerical comparisons and remaining limitations. This is an exploratory simulation, not an experimental validation.
+The model is linear and weakly excited. It does not calculate saturation, photon antibunching, many-photon correlations, nonlinear gates, or full Rydberg-EIT dynamics. The short [report](report.md) gives the numerical comparisons and remaining limitations. 
